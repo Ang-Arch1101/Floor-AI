@@ -825,35 +825,16 @@ export default function App() {
       if (!n || newLen <= 0) return prev;
       const fixedEnd = getFixedEnd(wall, prev);
       const ux = n.dx / n.len, uy = n.dy / n.len;
-      const EPS = 1;
-      let newStart = wall.start, newEnd = wall.end;
-      let oldPt = null, newPt = null;
+      const next = [...prev];
       if (fixedEnd === 'start') {
-        newEnd = { x: wall.start.x + ux * newLen, y: wall.start.y + uy * newLen };
-        oldPt = wall.end; newPt = newEnd;
+        next[wallIdx] = { ...wall, end: { x: wall.start.x + ux * newLen, y: wall.start.y + uy * newLen } };
       } else if (fixedEnd === 'end') {
-        newStart = { x: wall.end.x - ux * newLen, y: wall.end.y - uy * newLen };
-        oldPt = wall.start; newPt = newStart;
+        next[wallIdx] = { ...wall, start: { x: wall.end.x - ux * newLen, y: wall.end.y - uy * newLen } };
       } else {
         const cx = (wall.start.x + wall.end.x) / 2;
         const cy = (wall.start.y + wall.end.y) / 2;
         const h = newLen / 2;
-        newStart = { x: cx - ux * h, y: cy - uy * h };
-        newEnd   = { x: cx + ux * h, y: cy + uy * h };
-      }
-      const next = [...prev];
-      next[wallIdx] = { ...wall, start: newStart, end: newEnd };
-      if (oldPt && newPt) {
-        for (let i = 0; i < next.length; i++) {
-          if (i === wallIdx) continue;
-          const w = next[i];
-          if (w.isDoor || w.isWindow) continue;
-          if (Math.hypot(w.start.x - oldPt.x, w.start.y - oldPt.y) < EPS) {
-            next[i] = { ...w, start: newPt };
-          } else if (Math.hypot(w.end.x - oldPt.x, w.end.y - oldPt.y) < EPS) {
-            next[i] = { ...w, end: newPt };
-          }
-        }
+        next[wallIdx] = { ...wall, start: { x: cx - ux * h, y: cy - uy * h }, end: { x: cx + ux * h, y: cy + uy * h } };
       }
       return next;
     });
