@@ -67,6 +67,27 @@ function projectOnWall(pt, wall) {
   return Math.max(0, Math.min(1, t));
 }
 
+function getFixedEnd(wall, rawWalls) {
+  const EPS = 1;
+  function isTJunction(pt) {
+    for (const other of rawWalls) {
+      if (other === wall || other.isDoor || other.isWindow) continue;
+      const n = getNorm(other.start, other.end);
+      if (!n) continue;
+      const t = ((pt.x - other.start.x) * n.dx + (pt.y - other.start.y) * n.dy) / (n.len * n.len);
+      if (t < ENDPOINT_EPS || t > 1 - ENDPOINT_EPS) continue;
+      const cx = other.start.x + t * n.dx, cy = other.start.y + t * n.dy;
+      if (Math.hypot(pt.x - cx, pt.y - cy) < EPS) return true;
+    }
+    return false;
+  }
+  const startIsT = isTJunction(wall.start);
+  const endIsT   = isTJunction(wall.end);
+  if (startIsT && !endIsT) return 'start';
+  if (endIsT && !startIsT) return 'end';
+  return 'center';
+}
+
 function placeOpening(walls, wallIdx, clickPt, type, flipped = false) {
   const wall = walls[wallIdx];
   const n = getNorm(wall.start, wall.end);
@@ -589,6 +610,51 @@ function clipStubEnd(px, py, rawWalls, currentWall) {
   return null;
 }
 
+const DIM_OFFSET = 30;
+const ARROW_SIZE = 6;
+
+function WallDimAnnotation({ wall, onClickValue }) {
+  const n = getNorm(wall.start, wall.end);
+  if (!n) return null;
+  const { nx, ny } = n;
+  const ux = n.dx / n.len, uy = n.dy / n.len;
+  const dimColor = '#ffcc00';
+
+  // Dim line endpoints (offset from centerline by DIM_OFFSET in normal dir)
+  const dx1 = wall.start.x + nx * DIM_OFFSET, dy1 = wall.start.y + ny * DIM_OFFSET;
+  const dx2 = wall.end.x   + nx * DIM_OFFSET, dy2 = wall.end.y   + ny * DIM_OFFSET;
+
+  // Extension lines: from outer face to slightly past dim line
+  const extFrom = THICKNESS / 2, extTo = DIM_OFFSET + 4;
+  const ext1 = { x1: wall.start.x + nx*extFrom, y1: wall.start.y + ny*extFrom, x2: wall.start.x + nx*extTo, y2: wall.start.y + ny*extTo };
+  const ext2 = { x1: wall.end.x   + nx*extFrom, y1: wall.end.y   + ny*extFrom, x2: wall.end.x   + nx*extTo, y2: wall.end.y   + ny*extTo };
+
+  // Arrowheads (pointing inward on dim line)
+  // Wing perpendicular uses (nx, ny) = wall normal, which equals (-uy, ux)
+  const hw = ARROW_SIZE / 2;
+  const a1 = `${dx1},${dy1} ${dx1-ux*ARROW_SIZE+nx*hw},${dy1-uy*ARROW_SIZE+ny*hw} ${dx1-ux*ARROW_SIZE-nx*hw},${dy1-uy*ARROW_SIZE-ny*hw}`;
+  const a2 = `${dx2},${dy2} ${dx2+ux*ARROW_SIZE+nx*hw},${dy2+uy*ARROW_SIZE+ny*hw} ${dx2+ux*ARROW_SIZE-nx*hw},${dy2+uy*ARROW_SIZE-ny*hw}`;
+
+  const textX = (dx1 + dx2) / 2, textY = (dy1 + dy2) / 2;
+  const length = Math.round(n.len);
+
+  return (
+    <g>
+      <line {...ext1} stroke={dimColor} strokeWidth="0.8" />
+      <line {...ext2} stroke={dimColor} strokeWidth="0.8" />
+      <line x1={dx1} y1={dy1} x2={dx2} y2={dy2} stroke={dimColor} strokeWidth="0.8" />
+      <polygon points={a1} fill={dimColor} />
+      <polygon points={a2} fill={dimColor} />
+      <rect x={textX - 18} y={textY - 9} width={36} height={14} fill="#0f0f0f" rx="2" />
+      <text x={textX} y={textY + 2} textAnchor="middle" fontSize={11} fill={dimColor}
+        style={{ cursor: 'pointer', userSelect: 'none' }}
+        onClick={e => { e.stopPropagation(); onClickValue(e); }}>
+        {length}
+      </text>
+    </g>
+  );
+}
+
 function WallSegment({ wall, isSelected, columns = [], miter = {}, rawWalls = [] }) {
   const geo = computeWallLines(wall.start, wall.end);
   if (!geo) return null;
@@ -692,7 +758,8 @@ export default function App() {
   const [wallDragPending, setWallDragPending] = useState(null);
   const wallDragPendingRef = useRef(null);
   // wallDragPending: { wallIdx, origStart, origEnd, info, mouseStart } — set on mousedown, promoted to dragWall on move
-  const [snapIndicator, setSnapIndicator] = useState(null); 
+  const [snapIndicator, setSnapIndicator] = useState(null);
+  const [editingDim, setEditingDim] = useState(null);
   const svgRef = useRef();
 
   const wallMiters = useMemo(() => computeAllMiters(rawWalls), [rawWalls]);
@@ -749,6 +816,47 @@ export default function App() {
     });
     setColumns(prev => prev.filter((_, i) => !colItems.includes(i)));
     setSelected([]);
+  }
+
+  function applyNewLength(wallIdx, newLen) {
+    setRawWalls(prev => {
+      const wall = prev[wallIdx];
+      const n = getNorm(wall.start, wall.end);
+      if (!n || newLen <= 0) return prev;
+      const fixedEnd = getFixedEnd(wall, prev);
+      const ux = n.dx / n.len, uy = n.dy / n.len;
+      const EPS = 1;
+      let newStart = wall.start, newEnd = wall.end;
+      let oldPt = null, newPt = null;
+      if (fixedEnd === 'start') {
+        newEnd = { x: wall.start.x + ux * newLen, y: wall.start.y + uy * newLen };
+        oldPt = wall.end; newPt = newEnd;
+      } else if (fixedEnd === 'end') {
+        newStart = { x: wall.end.x - ux * newLen, y: wall.end.y - uy * newLen };
+        oldPt = wall.start; newPt = newStart;
+      } else {
+        const cx = (wall.start.x + wall.end.x) / 2;
+        const cy = (wall.start.y + wall.end.y) / 2;
+        const h = newLen / 2;
+        newStart = { x: cx - ux * h, y: cy - uy * h };
+        newEnd   = { x: cx + ux * h, y: cy + uy * h };
+      }
+      const next = [...prev];
+      next[wallIdx] = { ...wall, start: newStart, end: newEnd };
+      if (oldPt && newPt) {
+        for (let i = 0; i < next.length; i++) {
+          if (i === wallIdx) continue;
+          const w = next[i];
+          if (w.isDoor || w.isWindow) continue;
+          if (Math.hypot(w.start.x - oldPt.x, w.start.y - oldPt.y) < EPS) {
+            next[i] = { ...w, start: newPt };
+          } else if (Math.hypot(w.end.x - oldPt.x, w.end.y - oldPt.y) < EPS) {
+            next[i] = { ...w, end: newPt };
+          }
+        }
+      }
+      return next;
+    });
   }
 
   function getRawPt(e) {
@@ -1078,7 +1186,7 @@ if (mode !== 'wall') setSnapIndicator(null);
       if (singleSel?.type === 'col') return '已選取柱 — 空白鍵旋轉，Delete 刪除，Ctrl+點擊複選';
       if (obj?.isDoor)   return '已選取門 — 點雙箭頭反轉，Delete 刪除，Ctrl+點擊複選';
       if (obj?.isWindow) return '已選取窗 — 點雙箭頭反轉，Delete 刪除，Ctrl+點擊複選';
-      if (obj) return '已選取牆段 — 拖拉平移，Delete 刪除，Ctrl+點擊複選';
+      if (obj) return '已選取牆段 — 拖拉平移，點標註數字修改長度，Delete 刪除，Ctrl+點擊複選';
     }
     if (suspended) return `已暫停（${mode === 'column' ? '柱' : mode === 'wall' ? '牆' : mode === 'door' ? '門' : '窗'}模式）— 點擊繼續放置，再按 ESC 回到選取`;
     if (mode === 'select')  return '選取模式 — 點擊選取，Ctrl+點擊複選';
@@ -1134,6 +1242,15 @@ if (mode !== 'wall') setSnapIndicator(null);
           return <WallSegment key={i} wall={w} isSelected={isSel} columns={columns} miter={wallMiters[i] || {}} rawWalls={rawWalls} />;
         })}
 
+        {mode === 'select' && singleSel?.type === 'rawWall' && selWallObj && !selWallObj.isDoor && !selWallObj.isWindow && !dragWall && (
+          <WallDimAnnotation
+            wall={selWallObj}
+            onClickValue={e => {
+              const n = getNorm(selWallObj.start, selWallObj.end);
+              setEditingDim({ wallIdx: singleSel.idx, inputText: String(Math.round(n?.len ?? 0)), x: e.clientX, y: e.clientY });
+            }}
+          />
+        )}
         {selWallObj && (selWallObj.isDoor || selWallObj.isWindow) && <FlipIcon obj={selWallObj} />}
         {dragging && dragPreview && (dragPreview.isDoor ? <DoorSegment door={dragPreview} isPreview /> : <WindowSegment win={dragPreview} isPreview />)}
         {preview && <g opacity={0.4}><line {...preview.line1} stroke="#00d4aa" strokeWidth="1.5" /><line {...preview.line2} stroke="#00d4aa" strokeWidth="1.5" /></g>}
@@ -1143,6 +1260,27 @@ if (mode !== 'wall') setSnapIndicator(null);
   <circle cx={snapIndicator.x} cy={snapIndicator.y} r={6} stroke="#ff4466" strokeWidth="1.5" fill="none" />
 )}
       </svg>
+      {editingDim && (
+        <input
+          autoFocus
+          value={editingDim.inputText}
+          style={{ position: 'fixed', left: editingDim.x - 30, top: editingDim.y - 14,
+                   width: 80, fontSize: 14, textAlign: 'center',
+                   background: '#1a1a1a', color: '#ffcc00', border: '1px solid #ffcc00',
+                   borderRadius: 4, padding: '2px 6px', outline: 'none', zIndex: 20 }}
+          onChange={e => setEditingDim(prev => ({ ...prev, inputText: e.target.value }))}
+          onKeyDown={e => {
+            e.stopPropagation();
+            if (e.key === 'Enter') {
+              const v = parseFloat(editingDim.inputText);
+              if (!isNaN(v) && v > 0) applyNewLength(editingDim.wallIdx, v);
+              setEditingDim(null);
+            }
+            if (e.key === 'Escape') setEditingDim(null);
+          }}
+          onBlur={() => setEditingDim(null)}
+        />
+      )}
     </div>
   );
 }
