@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mkdir -p \"C:\\\\Users\\\\sun89\\\\Documents\\\\floorai\\\\.claude\")",
+      "mcp__Claude_Preview__preview_start"
+    ]
+  }
+}
