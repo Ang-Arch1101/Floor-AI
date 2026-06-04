@@ -68,7 +68,8 @@ function projectOnWall(pt, wall) {
 }
 
 function getFixedEnd(wall, rawWalls) {
-  const EPS = 1;
+  // stub ends are clipped to through-wall outer face (THICKNESS/2 from centreline)
+  const EPS = THICKNESS / 2 + 2;
   function isTJunction(pt) {
     for (const other of rawWalls) {
       if (other === wall || other.isDoor || other.isWindow) continue;
