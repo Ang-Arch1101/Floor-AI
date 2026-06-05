@@ -26,10 +26,10 @@ function getNorm(start, end) {
   return { dx, dy, len, nx: -dy / len, ny: dx / len };
 }
 
-function computeWallLines(start, end) {
+function computeWallLines(start, end, thickness = THICKNESS) {
   const n = getNorm(start, end);
   if (!n) return null;
-  const h = THICKNESS / 2;
+  const h = thickness / 2;
   return {
     line1: { x1: start.x + n.nx * h, y1: start.y + n.ny * h, x2: end.x + n.nx * h, y2: end.y + n.ny * h },
     line2: { x1: start.x - n.nx * h, y1: start.y - n.ny * h, x2: end.x - n.nx * h, y2: end.y - n.ny * h },
@@ -51,7 +51,7 @@ function ptBetweenWallLines(pt, wall) {
   const t = ((pt.x - wall.start.x) * n.dx + (pt.y - wall.start.y) * n.dy) / (n.len * n.len);
   if (t < 0 || t > 1) return false;
   const normalDist = Math.abs((pt.x - wall.start.x) * n.nx + (pt.y - wall.start.y) * n.ny);
-  return normalDist < THICKNESS / 2;
+  return normalDist < (wall.thickness ?? THICKNESS) / 2;
 }
 
 function distToOpening(pt, obj) {
@@ -103,8 +103,10 @@ function mergeOpening(walls, group) {
 }
 
 function getColCorners(col) {
-  const hw = col.rotated ? COL_H / 2 : COL_W / 2;
-  const hh = col.rotated ? COL_W / 2 : COL_H / 2;
+  const cw = col.w ?? COL_W;
+  const ch = col.h ?? COL_H;
+  const hw = col.rotated ? ch / 2 : cw / 2;
+  const hh = col.rotated ? cw / 2 : ch / 2;
   return { hw, hh };
 }
 
@@ -590,7 +592,7 @@ function clipStubEnd(px, py, rawWalls, currentWall) {
 }
 
 function WallSegment({ wall, isSelected, columns = [], miter = {}, rawWalls = [] }) {
-  const geo = computeWallLines(wall.start, wall.end);
+  const geo = computeWallLines(wall.start, wall.end, wall.thickness ?? THICKNESS);
   if (!geo) return null;
   const color = isSelected ? '#ff6b9d' : '#00d4aa';
   const rcCols = columns.filter(c => c.type === 'rc');
@@ -697,6 +699,20 @@ export default function App() {
   const [viewTransform, setViewTransform] = useState({ scale: 1, offsetX: 0, offsetY: 0 });
   const [panning, setPanning] = useState(null);
   const [endpointDrag, setEndpointDrag] = useState(null);
+  const [wallTypes, setWallTypes] = useState([{ id: 'wt1', name: '一般牆', thickness: 15 }]);
+  const [activeWallTypeId, setActiveWallTypeId] = useState('wt1');
+  const [colTypes, setColTypes] = useState([{ id: 'ct1', name: 'RC 柱', w: 80, h: 100 }]);
+  const [activeColTypeId, setActiveColTypeId] = useState('ct1');
+  const [wallTypePanel, setWallTypePanel] = useState(false);
+  const [wallTypeForm, setWallTypeForm] = useState({ name: '', thickness: '' });
+  const [colTypePanel, setColTypePanel] = useState(false);
+  const [colTypeForm, setColTypeForm] = useState({ name: '', w: '', h: '' });
+  const [editingWallTypeId, setEditingWallTypeId] = useState(null);
+  const [editingWallTypeForm, setEditingWallTypeForm] = useState({});
+  const [editingColTypeId, setEditingColTypeId] = useState(null);
+  const [editingColTypeForm, setEditingColTypeForm] = useState({});
+  const [history, setHistory] = useState([]);
+  const [future, setFuture] = useState([]);
 
   const wallMiters = useMemo(() => computeAllMiters(rawWalls), [rawWalls]);
 
@@ -725,13 +741,93 @@ export default function App() {
         }
       }
       if (e.key === 'Delete' || e.key === 'Backspace') { if (selected.length > 0) deleteSelected(selected); }
+      if ((e.ctrlKey || e.metaKey) && e.key === 'z') { e.preventDefault(); undo(); return; }
+      if ((e.ctrlKey || e.metaKey) && e.key === 'y') { e.preventDefault(); redo(); return; }
     }
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);
-  }, [selected, singleSel, mode, suspended, startPt]);
+  }, [selected, singleSel, mode, suspended, startPt, rawWalls, columns, history, future]);
+
+  function saveHistory() {
+    setHistory(prev => [...prev.slice(-49), { rawWalls, columns }]);
+    setFuture([]);
+  }
+
+  function undo() {
+    if (history.length === 0) return;
+    setFuture(f => [{ rawWalls, columns }, ...f]);
+    setRawWalls(history[history.length - 1].rawWalls);
+    setColumns(history[history.length - 1].columns);
+    setHistory(h => h.slice(0, -1));
+  }
+
+  function redo() {
+    if (future.length === 0) return;
+    setHistory(h => [...h, { rawWalls, columns }]);
+    setRawWalls(future[0].rawWalls);
+    setColumns(future[0].columns);
+    setFuture(f => f.slice(1));
+  }
+
+  function handleAddWallType() {
+    const t = parseInt(wallTypeForm.thickness);
+    if (!wallTypeForm.name || isNaN(t) || t <= 0) return;
+    const id = `wt${Date.now()}`;
+    setWallTypes(prev => [...prev, { id, name: wallTypeForm.name, thickness: t }]);
+    setActiveWallTypeId(id);
+    setWallTypeForm({ name: '', thickness: '' });
+    setWallTypePanel(false);
+  }
+
+  function handleAddColType() {
+    const w = parseInt(colTypeForm.w), h = parseInt(colTypeForm.h);
+    if (!colTypeForm.name || isNaN(w) || w <= 0 || isNaN(h) || h <= 0) return;
+    const id = `ct${Date.now()}`;
+    setColTypes(prev => [...prev, { id, name: colTypeForm.name, w, h }]);
+    setActiveColTypeId(id);
+    setColTypeForm({ name: '', w: '', h: '' });
+    setColTypePanel(false);
+  }
+
+  function handleEditWallType(id, name, thickness) {
+    saveHistory();
+    setWallTypes(prev => prev.map(t => t.id === id ? { ...t, name, thickness } : t));
+    setRawWalls(prev => prev.map(w => w.typeId === id ? { ...w, thickness } : w));
+    setEditingWallTypeId(null);
+  }
+
+  function handleDeleteWallType(id) {
+    if (wallTypes.length <= 1) return;
+    const count = rawWalls.filter(w => !w.isDoor && !w.isWindow && w.typeId === id).length;
+    if (count > 0 && !window.confirm(`${count} 個牆段使用此種類，刪除後將改為預設種類。繼續？`)) return;
+    saveHistory();
+    const fallback = wallTypes.find(t => t.id !== id);
+    setRawWalls(prev => prev.map(w => w.typeId === id ? { ...w, typeId: fallback.id, thickness: fallback.thickness } : w));
+    setWallTypes(prev => prev.filter(t => t.id !== id));
+    if (activeWallTypeId === id) setActiveWallTypeId(fallback.id);
+  }
+
+  function handleEditColType(id, name, w, h) {
+    saveHistory();
+    setColTypes(prev => prev.map(t => t.id === id ? { ...t, name, w, h } : t));
+    setColumns(prev => prev.map(c => c.typeId === id ? { ...c, w, h } : c));
+    setEditingColTypeId(null);
+  }
+
+  function handleDeleteColType(id) {
+    if (colTypes.length <= 1) return;
+    const count = columns.filter(c => c.typeId === id).length;
+    if (count > 0 && !window.confirm(`${count} 個柱使用此種類，刪除後將改為預設種類。繼續？`)) return;
+    saveHistory();
+    const fallback = colTypes.find(t => t.id !== id);
+    setColumns(prev => prev.map(c => c.typeId === id ? { ...c, typeId: fallback.id, w: fallback.w, h: fallback.h } : c));
+    setColTypes(prev => prev.filter(t => t.id !== id));
+    if (activeColTypeId === id) setActiveColTypeId(fallback.id);
+  }
 
   function deleteSelected(sel) {
     if (!sel || sel.length === 0) return;
+    saveHistory();
     const wallItems = sel.filter(s => s.type === 'rawWall').map(s => s.idx).sort((a, b) => b - a);
     const colItems  = sel.filter(s => s.type === 'col').map(s => s.idx).sort((a, b) => b - a);
     setRawWalls(prev => {
@@ -829,6 +925,7 @@ export default function App() {
           const dStart = Math.hypot(sx - sp.x, sy - sp.y);
           const dEnd   = Math.hypot(sx - ep.x, sy - ep.y);
           if (dStart < 10 || dEnd < 10) {
+            saveHistory();
             setEndpointDrag({ wallIdx: singleSel.idx, endpoint: dStart <= dEnd ? 'start' : 'end' });
             e.stopPropagation();
             return;
@@ -850,6 +947,7 @@ export default function App() {
           info,
           mouseStart: rawPt,
         };
+        saveHistory();
         setWallDragPending(pending);
         wallDragPendingRef.current = pending;
         return;
@@ -879,10 +977,11 @@ export default function App() {
 
 function applyWallSnap(pt) {
   // Phase 1: centerline snap
-  const SNAP_DIST = THICKNESS + 8;
-  let best = null, bestD = SNAP_DIST;
+  let best = null, bestD = THICKNESS + 8;
   for (const w of rawWalls) {
     if (w.isDoor || w.isWindow) continue;
+    const wt = w.thickness ?? THICKNESS;
+    const snapDist = wt + 8;
     const n = getNorm(w.start, w.end);
     if (!n) continue;
     const t = ((pt.x - w.start.x) * n.dx + (pt.y - w.start.y) * n.dy) / (n.len * n.len);
@@ -890,14 +989,16 @@ function applyWallSnap(pt) {
     const tc = Math.max(0, Math.min(1, t));
     const cx = w.start.x + tc * n.dx, cy = w.start.y + tc * n.dy;
     const normalDist = Math.abs((pt.x - w.start.x) * n.nx + (pt.y - w.start.y) * n.ny);
-    if (normalDist < bestD) { bestD = normalDist; best = { x: cx, y: cy }; }
+    if (normalDist < snapDist && normalDist < bestD) { bestD = normalDist; best = { x: cx, y: cy }; }
   }
   if (best) return { pt: best, snapPt: best };
 
   // Phase 2: face snap — 游標靠近外緣，snap 到 centerline
-  let faceBest = null, faceBestD = FACE_SNAP_EPS;
+  let faceBest = null, faceBestD = Infinity;
   for (const w of rawWalls) {
     if (w.isDoor || w.isWindow) continue;
+    const wt = w.thickness ?? THICKNESS;
+    const faceEps = wt / 2 + 10;
     const n = getNorm(w.start, w.end);
     if (!n) continue;
     const t = ((pt.x - w.start.x) * n.dx + (pt.y - w.start.y) * n.dy) / (n.len * n.len);
@@ -906,13 +1007,13 @@ function applyWallSnap(pt) {
     const cx = w.start.x + tc * n.dx, cy = w.start.y + tc * n.dy;
     const normalDist = Math.abs((pt.x - w.start.x) * n.nx + (pt.y - w.start.y) * n.ny);
     // 游標在牆 body 內，不是外緣，跳過
-    if (normalDist < THICKNESS / 2 - 2) continue;
-    const faceDist = Math.abs(normalDist - THICKNESS / 2);
-    if (faceDist < faceBestD) {
+    if (normalDist < wt / 2 - 2) continue;
+    const faceDist = Math.abs(normalDist - wt / 2);
+    if (faceDist < faceEps && faceDist < faceBestD) {
       faceBestD = faceDist;
       // snap 目標是 centerline，但紅圈顯示在外緣的投影點
       const sign = ((pt.x - w.start.x) * n.nx + (pt.y - w.start.y) * n.ny) >= 0 ? 1 : -1;
-      const facePt = { x: cx + sign * n.nx * (THICKNESS / 2), y: cy + sign * n.ny * (THICKNESS / 2) };
+      const facePt = { x: cx + sign * n.nx * (wt / 2), y: cy + sign * n.ny * (wt / 2) };
       faceBest = { pt: { x: cx, y: cy }, snapPt: facePt };
     }
   }
@@ -1038,6 +1139,7 @@ if (mode !== 'wall') setSnapIndicator(null);
     if (!dragging) return;
     const pt = getPoint(e);
     const { wallsMerged, mergedWallIdx, type, flipped } = dragging;
+    saveHistory();
     setRawWalls(placeOpening(wallsMerged, mergedWallIdx, pt, type, flipped));
     setDragging(null); setDragPreview(null);
   }
@@ -1091,7 +1193,9 @@ if (mode !== 'wall') setSnapIndicator(null);
     }
 
     if (mode === 'column') {
-      const newCol = { cx: pt.x, cy: pt.y, type: colType, rotated: previewRotated };
+      const ct = colTypes.find(t => t.id === activeColTypeId);
+      const newCol = { cx: pt.x, cy: pt.y, type: colType, rotated: previewRotated, typeId: activeColTypeId, w: ct?.w ?? COL_W, h: ct?.h ?? COL_H };
+      saveHistory();
       setRawWalls(prev => splitAllWallsByColumn(prev, newCol));
       setColumns(prev => [...prev, newCol]);
       return;
@@ -1102,15 +1206,18 @@ if (mode !== 'wall') setSnapIndicator(null);
       const endPt = applyOrthoLock(pt, startPt);
       const n = getNorm(startPt, endPt);
       if (n && n.len > 5) {
-        const newWall = { start: startPt, end: endPt };
+        const wt = wallTypes.find(t => t.id === activeWallTypeId);
+        const wallThickness = wt?.thickness ?? THICKNESS;
+        const newWall = { start: startPt, end: endPt, typeId: activeWallTypeId, thickness: wallThickness };
         const colSegs = splitWallByColumns(newWall, columns);
+        saveHistory();
         setRawWalls(prev => {
           let current = prev;
           const allNewSegs = [];
           for (const seg of colSegs) {
             const { newSegments, updatedWalls } = splitByWallIntersections(seg, current);
             current = updatedWalls;
-            allNewSegs.push(...newSegments);
+            allNewSegs.push(...newSegments.map(s => ({ ...s, typeId: activeWallTypeId, thickness: wallThickness })));
           }
           return [...current, ...allNewSegs];
         });
@@ -1127,7 +1234,8 @@ if (mode !== 'wall') setSnapIndicator(null);
     }
   }
 
-  const preview = startPt && cursor && !dragging && mode === 'wall' && !suspended ? computeWallLines(startPt, cursor) : null;
+  const activeWT = wallTypes.find(t => t.id === activeWallTypeId);
+  const preview = startPt && cursor && !dragging && mode === 'wall' && !suspended ? computeWallLines(startPt, cursor, activeWT?.thickness ?? THICKNESS) : null;
   const colPreview = mode === 'column' && cursor && !suspended ? { cx: cursor.x, cy: cursor.y, type: colType, rotated: previewRotated } : null;
   const DOOR_WIN_THRESHOLD = THICKNESS / 2 + 5;
   const openingPreview = !suspended && cursor && (mode === 'door' || mode === 'window') ? (() => {
@@ -1175,13 +1283,86 @@ if (mode !== 'wall') setSnapIndicator(null);
             {m.label}
           </button>
         ))}
-        {mode === 'column' && (
-          <select value={colType} onChange={e => setColType(e.target.value)}
-            style={{ padding: '6px 10px', background: '#1a1a1a', color: '#00d4aa', border: '1px solid #00d4aa66', borderRadius: 6, cursor: 'pointer', fontSize: 13, outline: 'none' }}>
-            <option value="rc">RC 柱</option>
-            <option value="h">H 鋼柱</option>
-          </select>
-        )}
+        {mode === 'wall' && (() => {
+          const ss = { padding: '4px 8px', background: '#1a1a1a', color: '#00d4aa', border: '1px solid #00d4aa66', borderRadius: 6, fontSize: 13, outline: 'none', cursor: 'pointer' };
+          const is = { padding: '4px 6px', background: '#111', color: '#ccc', border: '1px solid #333', borderRadius: 4, fontSize: 12, outline: 'none', width: 80 };
+          return (
+            <>
+              <div style={{ position: 'relative' }}>
+                <div style={{ background: '#111', border: '1px solid #00d4aa44', borderRadius: 6, minWidth: 140, overflow: 'hidden' }}>
+                  {wallTypes.map(t => (
+                    <div key={t.id} style={{ display: 'flex', alignItems: 'center', padding: '3px 6px', background: t.id === activeWallTypeId ? '#00d4aa22' : 'transparent', cursor: 'pointer' }}
+                      onClick={() => { if (editingWallTypeId !== t.id) setActiveWallTypeId(t.id); }}>
+                      {editingWallTypeId === t.id ? (
+                        <>
+                          <input value={editingWallTypeForm.name ?? ''} onChange={e => setEditingWallTypeForm(f => ({...f, name: e.target.value}))} style={{ ...is, width: 60 }} onClick={e => e.stopPropagation()} />
+                          <input value={editingWallTypeForm.thickness ?? ''} type="number" onChange={e => setEditingWallTypeForm(f => ({...f, thickness: e.target.value}))} style={{ ...is, width: 40, marginLeft: 4 }} onClick={e => e.stopPropagation()} />
+                          <button onClick={e => { e.stopPropagation(); handleEditWallType(t.id, editingWallTypeForm.name, parseInt(editingWallTypeForm.thickness)); }} style={{ ...ss, padding: '2px 6px', marginLeft: 4 }}>✓</button>
+                        </>
+                      ) : (
+                        <>
+                          <span style={{ color: t.id === activeWallTypeId ? '#00d4aa' : '#aaa', fontSize: 12, flex: 1 }}>{t.name} ({t.thickness}mm)</span>
+                          <button onClick={e => { e.stopPropagation(); setEditingWallTypeId(t.id); setEditingWallTypeForm({ name: t.name, thickness: String(t.thickness) }); }} style={{ background: 'none', border: 'none', color: '#666', cursor: 'pointer', fontSize: 11, padding: '0 3px' }}>✎</button>
+                          <button onClick={e => { e.stopPropagation(); handleDeleteWallType(t.id); }} disabled={wallTypes.length <= 1} style={{ background: 'none', border: 'none', color: wallTypes.length <= 1 ? '#333' : '#666', cursor: wallTypes.length <= 1 ? 'default' : 'pointer', fontSize: 11, padding: '0 3px' }}>✕</button>
+                        </>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <button onClick={() => setWallTypePanel(v => !v)} style={ss}>+</button>
+              {wallTypePanel && (
+                <span style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                  <input placeholder="名稱" value={wallTypeForm.name} onChange={e => setWallTypeForm(f => ({...f, name: e.target.value}))} style={is} />
+                  <input placeholder="厚度" type="number" value={wallTypeForm.thickness} onChange={e => setWallTypeForm(f => ({...f, thickness: e.target.value}))} style={{ ...is, width: 56 }} />
+                  <button onClick={handleAddWallType} style={ss}>確認</button>
+                </span>
+              )}
+            </>
+          );
+        })()}
+        {mode === 'column' && (() => {
+          const ss = { padding: '4px 8px', background: '#1a1a1a', color: '#00d4aa', border: '1px solid #00d4aa66', borderRadius: 6, fontSize: 13, outline: 'none', cursor: 'pointer' };
+          const is = { padding: '4px 6px', background: '#111', color: '#ccc', border: '1px solid #333', borderRadius: 4, fontSize: 12, outline: 'none', width: 80 };
+          return (
+            <>
+              <select value={colType} onChange={e => setColType(e.target.value)} style={ss}>
+                <option value="rc">RC 柱</option>
+                <option value="h">H 鋼柱</option>
+              </select>
+              <div style={{ background: '#111', border: '1px solid #00d4aa44', borderRadius: 6, minWidth: 140, overflow: 'hidden' }}>
+                {colTypes.map(t => (
+                  <div key={t.id} style={{ display: 'flex', alignItems: 'center', padding: '3px 6px', background: t.id === activeColTypeId ? '#00d4aa22' : 'transparent', cursor: 'pointer' }}
+                    onClick={() => { if (editingColTypeId !== t.id) setActiveColTypeId(t.id); }}>
+                    {editingColTypeId === t.id ? (
+                      <>
+                        <input value={editingColTypeForm.name ?? ''} onChange={e => setEditingColTypeForm(f => ({...f, name: e.target.value}))} style={{ ...is, width: 56 }} onClick={e => e.stopPropagation()} />
+                        <input value={editingColTypeForm.w ?? ''} type="number" onChange={e => setEditingColTypeForm(f => ({...f, w: e.target.value}))} style={{ ...is, width: 36, marginLeft: 4 }} onClick={e => e.stopPropagation()} />
+                        <input value={editingColTypeForm.h ?? ''} type="number" onChange={e => setEditingColTypeForm(f => ({...f, h: e.target.value}))} style={{ ...is, width: 36, marginLeft: 4 }} onClick={e => e.stopPropagation()} />
+                        <button onClick={e => { e.stopPropagation(); handleEditColType(t.id, editingColTypeForm.name, parseInt(editingColTypeForm.w), parseInt(editingColTypeForm.h)); }} style={{ ...ss, padding: '2px 6px', marginLeft: 4 }}>✓</button>
+                      </>
+                    ) : (
+                      <>
+                        <span style={{ color: t.id === activeColTypeId ? '#00d4aa' : '#aaa', fontSize: 12, flex: 1 }}>{t.name} ({t.w}×{t.h})</span>
+                        <button onClick={e => { e.stopPropagation(); setEditingColTypeId(t.id); setEditingColTypeForm({ name: t.name, w: String(t.w), h: String(t.h) }); }} style={{ background: 'none', border: 'none', color: '#666', cursor: 'pointer', fontSize: 11, padding: '0 3px' }}>✎</button>
+                        <button onClick={e => { e.stopPropagation(); handleDeleteColType(t.id); }} disabled={colTypes.length <= 1} style={{ background: 'none', border: 'none', color: colTypes.length <= 1 ? '#333' : '#666', cursor: colTypes.length <= 1 ? 'default' : 'pointer', fontSize: 11, padding: '0 3px' }}>✕</button>
+                      </>
+                    )}
+                  </div>
+                ))}
+              </div>
+              <button onClick={() => setColTypePanel(v => !v)} style={ss}>+</button>
+              {colTypePanel && (
+                <span style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                  <input placeholder="名稱" value={colTypeForm.name} onChange={e => setColTypeForm(f => ({...f, name: e.target.value}))} style={is} />
+                  <input placeholder="寬" type="number" value={colTypeForm.w} onChange={e => setColTypeForm(f => ({...f, w: e.target.value}))} style={{ ...is, width: 44 }} />
+                  <input placeholder="深" type="number" value={colTypeForm.h} onChange={e => setColTypeForm(f => ({...f, h: e.target.value}))} style={{ ...is, width: 44 }} />
+                  <button onClick={handleAddColType} style={ss}>確認</button>
+                </span>
+              )}
+            </>
+          );
+        })()}
         {selected.length > 0 && (
           <button onClick={() => deleteSelected(selected)}
             style={{ padding: '6px 16px', background: '#ff6b9d22', color: '#ff6b9d', border: '1px solid #ff6b9d66', borderRadius: 6, cursor: 'pointer', fontSize: 13 }}>
