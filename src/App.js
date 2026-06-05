@@ -696,6 +696,7 @@ export default function App() {
   const svgRef = useRef();
   const [viewTransform, setViewTransform] = useState({ scale: 1, offsetX: 0, offsetY: 0 });
   const [panning, setPanning] = useState(null);
+  const [endpointDrag, setEndpointDrag] = useState(null);
 
   const wallMiters = useMemo(() => computeAllMiters(rawWalls), [rawWalls]);
 
@@ -708,7 +709,7 @@ export default function App() {
         if (mode === 'select') { setSelected([]); }
         else if (mode === 'wall' && startPt) { setStartPt(null); }
         else if (suspended) { setSuspended(false); setStartPt(null); setSelected([]); setMode('select'); }
-        else { setStartPt(null); setSelected([]); setSuspended(true); }
+        else { setStartPt(null); setSelected([]); setSuspended(false); setMode('select'); }
         return;
       }
       if (e.key === 'c' || e.key === 'C') { setMode('column'); setStartPt(null); setSelected([]); setSuspended(false); }
@@ -816,6 +817,24 @@ export default function App() {
         e.stopPropagation();
         return;
       }
+      // Check for endpoint drag (handle at wall start/end)
+      if (singleSel?.type === 'rawWall') {
+        const selW = rawWalls[singleSel.idx];
+        if (selW && !selW.isDoor && !selW.isWindow) {
+          const rect = svgRef.current.getBoundingClientRect();
+          const sx = e.clientX - rect.left;
+          const sy = e.clientY - rect.top;
+          const sp = worldToScreen(selW.start.x, selW.start.y);
+          const ep = worldToScreen(selW.end.x,   selW.end.y);
+          const dStart = Math.hypot(sx - sp.x, sy - sp.y);
+          const dEnd   = Math.hypot(sx - ep.x, sy - ep.y);
+          if (dStart < 10 || dEnd < 10) {
+            setEndpointDrag({ wallIdx: singleSel.idx, endpoint: dStart <= dEnd ? 'start' : 'end' });
+            e.stopPropagation();
+            return;
+          }
+        }
+      }
       // Check for wall drag (pending — only activate on mousemove)
       for (let i = rawWalls.length - 1; i >= 0; i--) {
         const w = rawWalls[i];
@@ -909,6 +928,17 @@ function applyWallSnap(pt) {
       setViewTransform(prev => ({ ...prev, offsetX: panning.origOffsetX + dx, offsetY: panning.origOffsetY + dy }));
       return;
     }
+    if (endpointDrag) {
+      const rawPt = getRawPt(e);
+      const snapped = { x: snap(rawPt.x), y: snap(rawPt.y) };
+      setRawWalls(prev => {
+        const next = [...prev];
+        const w = next[endpointDrag.wallIdx];
+        next[endpointDrag.wallIdx] = { ...w, [endpointDrag.endpoint]: snapped };
+        return next;
+      });
+      return;
+    }
     let pt = getPoint(e);
     if (mode === 'wall' && startPt) pt = applyOrthoLock(pt, startPt);
     let wallSnapPt = null;
@@ -995,6 +1025,7 @@ if (mode !== 'wall') setSnapIndicator(null);
 
   function handleMouseUp(e) {
     if (panning) { setPanning(null); return; }
+    if (endpointDrag) { setEndpointDrag(null); return; }
     if (wallDragPending) {
       setWallDragPending(null);
        wallDragPendingRef.current = null;
@@ -1200,6 +1231,19 @@ if (mode !== 'wall') setSnapIndicator(null);
             <circle cx={snapIndicator.x} cy={snapIndicator.y} r={6} stroke="#ff4466" strokeWidth="1.5" fill="none" />
           )}
         </g>
+
+        {singleSel?.type === 'rawWall' && (() => {
+          const w = rawWalls[singleSel.idx];
+          if (!w || w.isDoor || w.isWindow) return null;
+          const sp = worldToScreen(w.start.x, w.start.y);
+          const ep = worldToScreen(w.end.x,   w.end.y);
+          return (
+            <g>
+              <circle cx={sp.x} cy={sp.y} r={6} fill="#00d4aa" stroke="#fff" strokeWidth="1.5" style={{ cursor: 'crosshair' }} />
+              <circle cx={ep.x} cy={ep.y} r={6} fill="#00d4aa" stroke="#fff" strokeWidth="1.5" style={{ cursor: 'crosshair' }} />
+            </g>
+          );
+        })()}
       </svg>
     </div>
   );
