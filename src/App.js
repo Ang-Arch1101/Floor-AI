@@ -692,8 +692,10 @@ export default function App() {
   const [wallDragPending, setWallDragPending] = useState(null);
   const wallDragPendingRef = useRef(null);
   // wallDragPending: { wallIdx, origStart, origEnd, info, mouseStart } — set on mousedown, promoted to dragWall on move
-  const [snapIndicator, setSnapIndicator] = useState(null); 
+  const [snapIndicator, setSnapIndicator] = useState(null);
   const svgRef = useRef();
+  const [viewTransform, setViewTransform] = useState({ scale: 1, offsetX: 0, offsetY: 0 });
+  const [panning, setPanning] = useState(null);
 
   const wallMiters = useMemo(() => computeAllMiters(rawWalls), [rawWalls]);
 
@@ -751,9 +753,27 @@ export default function App() {
     setSelected([]);
   }
 
+  function screenToWorld(sx, sy) {
+    const svgH = svgRef.current?.clientHeight ?? 600;
+    return {
+      x: (sx - viewTransform.offsetX) / viewTransform.scale,
+      y: (svgH - sy - viewTransform.offsetY) / viewTransform.scale,
+    };
+  }
+
+  function worldToScreen(wx, wy) {
+    const svgH = svgRef.current?.clientHeight ?? 600;
+    return {
+      x: wx * viewTransform.scale + viewTransform.offsetX,
+      y: svgH - (wy * viewTransform.scale + viewTransform.offsetY),
+    };
+  }
+
   function getRawPt(e) {
     const rect = svgRef.current.getBoundingClientRect();
-    return { x: (e.clientX - rect.left) * (svgRef.current.clientWidth / rect.width), y: (e.clientY - rect.top) * (svgRef.current.clientHeight / rect.height) };
+    const sx = (e.clientX - rect.left) * (svgRef.current.clientWidth / rect.width);
+    const sy = (e.clientY - rect.top) * (svgRef.current.clientHeight / rect.height);
+    return screenToWorld(sx, sy);
   }
 
   function getPoint(e) { const r = getRawPt(e); return { x: snap(r.x), y: snap(r.y) }; }
@@ -768,6 +788,11 @@ export default function App() {
   }
 
   function handleMouseDown(e) {
+    if (e.button === 1) {
+      e.preventDefault();
+      setPanning({ startX: e.clientX, startY: e.clientY, origOffsetX: viewTransform.offsetX, origOffsetY: viewTransform.offsetY });
+      return;
+    }
     if (mode !== 'door' && mode !== 'window' && mode !== 'select') return;
     const rawPt = getRawPt(e);
     const pt = { x: snap(rawPt.x), y: snap(rawPt.y) };
@@ -878,6 +903,12 @@ function applyWallSnap(pt) {
 }
 
   function handleMouseMove(e) {
+    if (panning) {
+      const dx = e.clientX - panning.startX;
+      const dy = e.clientY - panning.startY;
+      setViewTransform(prev => ({ ...prev, offsetX: panning.origOffsetX + dx, offsetY: panning.origOffsetY + dy }));
+      return;
+    }
     let pt = getPoint(e);
     if (mode === 'wall' && startPt) pt = applyOrthoLock(pt, startPt);
     let wallSnapPt = null;
@@ -963,6 +994,7 @@ if (mode !== 'wall') setSnapIndicator(null);
   }
 
   function handleMouseUp(e) {
+    if (panning) { setPanning(null); return; }
     if (wallDragPending) {
       setWallDragPending(null);
        wallDragPendingRef.current = null;
@@ -977,6 +1009,19 @@ if (mode !== 'wall') setSnapIndicator(null);
     const { wallsMerged, mergedWallIdx, type, flipped } = dragging;
     setRawWalls(placeOpening(wallsMerged, mergedWallIdx, pt, type, flipped));
     setDragging(null); setDragPreview(null);
+  }
+
+  function handleWheel(e) {
+    e.preventDefault();
+    const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
+    const rect = svgRef.current.getBoundingClientRect();
+    const sx = e.clientX - rect.left;
+    const sy = e.clientY - rect.top;
+    setViewTransform(prev => ({
+      scale: prev.scale * factor,
+      offsetX: sx - (sx - prev.offsetX) * factor,
+      offsetY: sy - (sy - prev.offsetY) * factor,
+    }));
   }
 
   function handleFlip() {
@@ -1117,31 +1162,44 @@ if (mode !== 'wall') setSnapIndicator(null);
       <div style={{ position: 'absolute', bottom: 16, left: 16, color: '#555', fontSize: 12 }}>{getHint()}</div>
 
       <svg ref={svgRef}
-        style={{ width: '100%', height: '100%', cursor: dragging ? 'grabbing' : 'crosshair' }}
-        onClick={handleClick} onMouseMove={handleMouseMove} onMouseDown={handleMouseDown} onMouseUp={handleMouseUp}>
+        style={{ width: '100%', height: '100%', cursor: panning ? 'grabbing' : dragging ? 'grabbing' : 'crosshair', touchAction: 'none' }}
+        onClick={handleClick} onMouseMove={handleMouseMove} onMouseDown={handleMouseDown} onMouseUp={handleMouseUp} onWheel={handleWheel}>
 
-        {columns.map((col, i) => {
-          const isSel = isInSel(selected, { type: 'col', idx: i });
-          return col.type === 'rc'
-            ? <RCColumn key={`col-${i}`} col={col} isSelected={isSel} rawWalls={rawWalls} />
-            : <HColumn  key={`col-${i}`} col={col} isSelected={isSel} />;
-        })}
+        {(() => {
+          const { x: ox, y: oy } = worldToScreen(0, 0);
+          return (
+            <g>
+              <line x1={ox - 20} y1={oy} x2={ox + 20} y2={oy} stroke="#444" strokeWidth="1" />
+              <line x1={ox} y1={oy - 20} x2={ox} y2={oy + 20} stroke="#444" strokeWidth="1" />
+              <circle cx={ox} cy={oy} r={3} fill="#666" />
+            </g>
+          );
+        })()}
 
-        {rawWalls.map((w, i) => {
-          const isSel = isInSel(selected, { type: 'rawWall', idx: i });
-          if (w.isDoor) return <DoorSegment key={i} door={w} isSelected={isSel} />;
-          if (w.isWindow) return <WindowSegment key={i} win={w} isSelected={isSel} />;
-          return <WallSegment key={i} wall={w} isSelected={isSel} columns={columns} miter={wallMiters[i] || {}} rawWalls={rawWalls} />;
-        })}
+        <g transform={`matrix(${viewTransform.scale}, 0, 0, ${-viewTransform.scale}, ${viewTransform.offsetX}, ${(svgRef.current?.clientHeight ?? 600) - viewTransform.offsetY})`}>
+          {columns.map((col, i) => {
+            const isSel = isInSel(selected, { type: 'col', idx: i });
+            return col.type === 'rc'
+              ? <RCColumn key={`col-${i}`} col={col} isSelected={isSel} rawWalls={rawWalls} />
+              : <HColumn  key={`col-${i}`} col={col} isSelected={isSel} />;
+          })}
 
-        {selWallObj && (selWallObj.isDoor || selWallObj.isWindow) && <FlipIcon obj={selWallObj} />}
-        {dragging && dragPreview && (dragPreview.isDoor ? <DoorSegment door={dragPreview} isPreview /> : <WindowSegment win={dragPreview} isPreview />)}
-        {preview && <g opacity={0.4}><line {...preview.line1} stroke="#00d4aa" strokeWidth="1.5" /><line {...preview.line2} stroke="#00d4aa" strokeWidth="1.5" /></g>}
-        {colPreview && (colPreview.type === 'rc' ? <RCColumn col={colPreview} isSelected={false} isPreview rawWalls={[]} /> : <HColumn col={colPreview} isSelected={false} isPreview />)}
-        {openingPreview && !dragging && (openingPreview.isDoor ? <DoorSegment door={openingPreview} isPreview /> : <WindowSegment win={openingPreview} isPreview />)}
-      {snapIndicator && (
-  <circle cx={snapIndicator.x} cy={snapIndicator.y} r={6} stroke="#ff4466" strokeWidth="1.5" fill="none" />
-)}
+          {rawWalls.map((w, i) => {
+            const isSel = isInSel(selected, { type: 'rawWall', idx: i });
+            if (w.isDoor) return <DoorSegment key={i} door={w} isSelected={isSel} />;
+            if (w.isWindow) return <WindowSegment key={i} win={w} isSelected={isSel} />;
+            return <WallSegment key={i} wall={w} isSelected={isSel} columns={columns} miter={wallMiters[i] || {}} rawWalls={rawWalls} />;
+          })}
+
+          {selWallObj && (selWallObj.isDoor || selWallObj.isWindow) && <FlipIcon obj={selWallObj} />}
+          {dragging && dragPreview && (dragPreview.isDoor ? <DoorSegment door={dragPreview} isPreview /> : <WindowSegment win={dragPreview} isPreview />)}
+          {preview && <g opacity={0.4}><line {...preview.line1} stroke="#00d4aa" strokeWidth="1.5" /><line {...preview.line2} stroke="#00d4aa" strokeWidth="1.5" /></g>}
+          {colPreview && (colPreview.type === 'rc' ? <RCColumn col={colPreview} isSelected={false} isPreview rawWalls={[]} /> : <HColumn col={colPreview} isSelected={false} isPreview />)}
+          {openingPreview && !dragging && (openingPreview.isDoor ? <DoorSegment door={openingPreview} isPreview /> : <WindowSegment win={openingPreview} isPreview />)}
+          {snapIndicator && (
+            <circle cx={snapIndicator.x} cy={snapIndicator.y} r={6} stroke="#ff4466" strokeWidth="1.5" fill="none" />
+          )}
+        </g>
       </svg>
     </div>
   );
