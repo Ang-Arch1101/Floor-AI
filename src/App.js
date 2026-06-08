@@ -209,7 +209,6 @@ function segIntersectT(ax0, ay0, ax1, ay1, bx0, by0, bx1, by1) {
 }
 
 const ENDPOINT_EPS = 0.02;
-const FACE_SNAP_EPS = THICKNESS / 2 + 10; // px — 外緣 snap 容差
 
 function splitByWallIntersections(newWall, rawWalls) {
   const newDx = newWall.end.x - newWall.start.x;
@@ -837,6 +836,7 @@ export default function App() {
     }
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected, singleSel, mode, suspended, startPt, rawWalls, columns, history, future]);
 
   useEffect(() => {
