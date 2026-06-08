@@ -562,10 +562,14 @@ function computeWallDragInfo(wall, wallIdx, rawWalls, columns) {
       { x: col.cx - hw, y: col.cy - hh }, { x: col.cx + hw, y: col.cy - hh },
       { x: col.cx - hw, y: col.cy + hh }, { x: col.cx + hw, y: col.cy + hh },
     ];
-    const colConnected = [wall.start, wall.end].some(pt =>
-      Math.abs(pt.x - col.cx) <= hw + 2 &&
-      Math.abs(pt.y - col.cy) <= hh + 2
-    );
+    const FACE_EPS = GRID;
+    const colConnected = [wall.start, wall.end].some(pt => {
+      const nearXFace = Math.abs(pt.x - (col.cx - hw)) < FACE_EPS || Math.abs(pt.x - (col.cx + hw)) < FACE_EPS;
+      const inYRange  = pt.y >= col.cy - hh - FACE_EPS && pt.y <= col.cy + hh + FACE_EPS;
+      const nearYFace = Math.abs(pt.y - (col.cy - hh)) < FACE_EPS || Math.abs(pt.y - (col.cy + hh)) < FACE_EPS;
+      const inXRange  = pt.x >= col.cx - hw - FACE_EPS && pt.x <= col.cx + hw + FACE_EPS;
+      return (nearXFace && inYRange) || (nearYFace && inXRange);
+    });
     if (!colConnected) continue;
     const projs = corners.map(proj);
     limitMin = Math.max(limitMin, Math.min(...projs) - wallStartProj);
@@ -1148,7 +1152,7 @@ function applyWallSnap(pt) {
     if (panning) {
       const dx = e.clientX - panning.startX;
       const dy = e.clientY - panning.startY;
-      setViewTransform(prev => ({ ...prev, offsetX: panning.origOffsetX + dx, offsetY: panning.origOffsetY + dy }));
+      setViewTransform(prev => ({ ...prev, offsetX: panning.origOffsetX + dx, offsetY: panning.origOffsetY - dy }));
       return;
     }
     if (endpointDrag) {
