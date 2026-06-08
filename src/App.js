@@ -572,8 +572,8 @@ function computeWallDragInfo(wall, wallIdx, rawWalls, columns) {
     });
     if (!colConnected) continue;
     const projs = corners.map(proj);
-    limitMin = Math.max(limitMin, Math.min(...projs) - wallStartProj);
-    limitMax = Math.min(limitMax, Math.max(...projs) - wallStartProj);
+    limitMin = Math.max(limitMin, Math.min(...projs) + half - wallStartProj);
+    limitMax = Math.min(limitMax, Math.max(...projs) - half - wallStartProj);
     snapPoints.push(...corners, { x: col.cx, y: col.cy });
   }
 
