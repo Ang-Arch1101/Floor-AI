@@ -563,16 +563,16 @@ function computeWallDragInfo(wall, wallIdx, rawWalls, columns) {
     ];
     const FACE_EPS = GRID;
     const colConnected = [wall.start, wall.end].some(pt => {
-      const nearXFace = Math.abs(pt.x - (col.cx - hw)) < FACE_EPS || Math.abs(pt.x - (col.cx + hw)) < FACE_EPS;
+      const nearXFace = Math.abs(pt.x - (col.cx - hw)) <= FACE_EPS || Math.abs(pt.x - (col.cx + hw)) <= FACE_EPS;
       const inYRange  = pt.y >= col.cy - hh - FACE_EPS && pt.y <= col.cy + hh + FACE_EPS;
-      const nearYFace = Math.abs(pt.y - (col.cy - hh)) < FACE_EPS || Math.abs(pt.y - (col.cy + hh)) < FACE_EPS;
+      const nearYFace = Math.abs(pt.y - (col.cy - hh)) <= FACE_EPS || Math.abs(pt.y - (col.cy + hh)) <= FACE_EPS;
       const inXRange  = pt.x >= col.cx - hw - FACE_EPS && pt.x <= col.cx + hw + FACE_EPS;
       return (nearXFace && inYRange) || (nearYFace && inXRange);
     });
     if (!colConnected) continue;
     const projs = corners.map(proj);
-    limitMin = Math.max(limitMin, Math.min(...projs) + half - wallStartProj);
-    limitMax = Math.min(limitMax, Math.max(...projs) - half - wallStartProj);
+    limitMin = Math.max(limitMin, Math.min(...projs) - wallStartProj);
+    limitMax = Math.min(limitMax, Math.max(...projs) - wallStartProj);
     snapPoints.push(...corners, { x: col.cx, y: col.cy });
   }
 
@@ -811,6 +811,8 @@ export default function App() {
 
   useEffect(() => {
     function handleKey(e) {
+      const tag = e.target.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
       if (e.key === 'Escape') {
         if (mode === 'select') { setSelected([]); }
         else if (mode === 'wall' && startPt) { setStartPt(null); }
