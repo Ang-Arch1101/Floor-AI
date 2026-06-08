@@ -564,7 +564,11 @@ function computeWallDragInfo(wall, wallIdx, rawWalls, columns) {
       { x: col.cx - hw, y: col.cy - hh }, { x: col.cx + hw, y: col.cy - hh },
       { x: col.cx - hw, y: col.cy + hh }, { x: col.cx + hw, y: col.cy + hh },
     ];
-    if (![wall.start, wall.end].some(pt => ptInCol(pt, col))) continue;
+    const colConnected = [wall.start, wall.end].some(pt =>
+      Math.abs(pt.x - col.cx) <= hw + half + GRID &&
+      Math.abs(pt.y - col.cy) <= hh + half + GRID
+    );
+    if (!colConnected) continue;
     const projs = corners.map(proj);
     limitMin = Math.max(limitMin, Math.min(...projs) - wallStartProj);
     limitMax = Math.min(limitMax, Math.max(...projs) - wallStartProj);
