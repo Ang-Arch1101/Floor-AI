@@ -1343,7 +1343,8 @@ if (mode !== 'wall') setSnapIndicator(null);
 
   const activeWT = wallTypes.find(t => t.id === activeWallTypeId);
   const preview = startPt && cursor && !dragging && mode === 'wall' && !suspended ? computeWallLines(startPt, cursor, activeWT?.thickness ?? THICKNESS) : null;
-  const colPreview = mode === 'column' && cursor && !suspended ? { cx: cursor.x, cy: cursor.y, type: colType, rotated: previewRotated } : null;
+  const activeCT = colTypes.find(t => t.id === activeColTypeId);
+  const colPreview = mode === 'column' && cursor && !suspended ? { cx: cursor.x, cy: cursor.y, type: colType, rotated: previewRotated, typeId: activeColTypeId, w: activeCT?.w ?? COL_W, h: activeCT?.h ?? COL_H } : null;
   const DOOR_WIN_THRESHOLD = THICKNESS / 2 + 5;
   const openingPreview = !suspended && cursor && (mode === 'door' || mode === 'window') ? (() => {
     const idx = rawWalls.findIndex(w => !w.isDoor && !w.isWindow && distToWall(cursor, w) < DOOR_WIN_THRESHOLD);
@@ -1470,6 +1471,32 @@ if (mode !== 'wall') setSnapIndicator(null);
             </>
           );
         })()}
+        {singleSel?.type === 'rawWall' && selWallObj && !selWallObj.isDoor && !selWallObj.isWindow && (
+          <select
+            value={selWallObj.typeId ?? ''}
+            onChange={e => {
+              const wt = wallTypes.find(t => t.id === e.target.value);
+              if (!wt) return;
+              saveHistory();
+              setRawWalls(prev => { const next = [...prev]; next[singleSel.idx] = { ...next[singleSel.idx], typeId: wt.id, thickness: wt.thickness }; return next; });
+            }}
+            style={{ padding: '6px 10px', background: '#1a1a1a', color: '#00d4aa', border: '1px solid #00d4aa66', borderRadius: 6, cursor: 'pointer', fontSize: 13, outline: 'none' }}>
+            {wallTypes.map(t => <option key={t.id} value={t.id}>{t.name} ({t.thickness}mm)</option>)}
+          </select>
+        )}
+        {singleSel?.type === 'col' && columns[singleSel.idx] && (
+          <select
+            value={columns[singleSel.idx].typeId ?? ''}
+            onChange={e => {
+              const ct = colTypes.find(t => t.id === e.target.value);
+              if (!ct) return;
+              saveHistory();
+              setColumns(prev => { const next = [...prev]; next[singleSel.idx] = { ...next[singleSel.idx], typeId: ct.id, w: ct.w, h: ct.h }; return next; });
+            }}
+            style={{ padding: '6px 10px', background: '#1a1a1a', color: '#00d4aa', border: '1px solid #00d4aa66', borderRadius: 6, cursor: 'pointer', fontSize: 13, outline: 'none' }}>
+            {colTypes.map(t => <option key={t.id} value={t.id}>{t.name} ({t.w}×{t.h})</option>)}
+          </select>
+        )}
         {selected.length > 0 && (
           <button onClick={() => deleteSelected(selected)}
             style={{ padding: '6px 16px', background: '#ff6b9d22', color: '#ff6b9d', border: '1px solid #ff6b9d66', borderRadius: 6, cursor: 'pointer', fontSize: 13 }}>
