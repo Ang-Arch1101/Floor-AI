@@ -678,8 +678,12 @@ const PLACE_MODES = [
 ];
 
 export default function App() {
-  const [rawWalls, setRawWalls] = useState([]);
-  const [columns, setColumns] = useState([]);
+  const [rawWalls, setRawWalls] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('floorAI_rawWalls') ?? 'null') ?? []; } catch { return []; }
+  });
+  const [columns, setColumns] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('floorAI_columns') ?? 'null') ?? []; } catch { return []; }
+  });
   const [startPt, setStartPt] = useState(null);
   const [cursor, setCursor] = useState(null);
   const [mode, setMode] = useState('column');
@@ -699,9 +703,13 @@ export default function App() {
   const [viewTransform, setViewTransform] = useState({ scale: 1, offsetX: 0, offsetY: 0 });
   const [panning, setPanning] = useState(null);
   const [endpointDrag, setEndpointDrag] = useState(null);
-  const [wallTypes, setWallTypes] = useState([{ id: 'wt1', name: '一般牆', thickness: 15 }]);
+  const [wallTypes, setWallTypes] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('floorAI_wallTypes') ?? 'null') ?? [{ id: 'wt1', name: '一般牆', thickness: 15 }]; } catch { return [{ id: 'wt1', name: '一般牆', thickness: 15 }]; }
+  });
   const [activeWallTypeId, setActiveWallTypeId] = useState('wt1');
-  const [colTypes, setColTypes] = useState([{ id: 'ct1', name: 'RC 柱', w: 80, h: 100 }]);
+  const [colTypes, setColTypes] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('floorAI_colTypes') ?? 'null') ?? [{ id: 'ct1', name: 'RC 柱', w: 80, h: 100 }]; } catch { return [{ id: 'ct1', name: 'RC 柱', w: 80, h: 100 }]; }
+  });
   const [activeColTypeId, setActiveColTypeId] = useState('ct1');
   const [wallTypePanel, setWallTypePanel] = useState(false);
   const [wallTypeForm, setWallTypeForm] = useState({ name: '', thickness: '' });
@@ -748,6 +756,13 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleKey);
   }, [selected, singleSel, mode, suspended, startPt, rawWalls, columns, history, future]);
 
+  useEffect(() => {
+    localStorage.setItem('floorAI_rawWalls', JSON.stringify(rawWalls));
+    localStorage.setItem('floorAI_columns', JSON.stringify(columns));
+    localStorage.setItem('floorAI_wallTypes', JSON.stringify(wallTypes));
+    localStorage.setItem('floorAI_colTypes', JSON.stringify(colTypes));
+  }, [rawWalls, columns, wallTypes, colTypes]);
+
   function saveHistory() {
     setHistory(prev => [...prev.slice(-49), { rawWalls, columns }]);
     setFuture([]);
@@ -767,6 +782,13 @@ export default function App() {
     setRawWalls(future[0].rawWalls);
     setColumns(future[0].columns);
     setFuture(f => f.slice(1));
+  }
+
+  function handleClear() {
+    if (!window.confirm('清除所有牆與柱？此動作無法復原。')) return;
+    saveHistory();
+    setRawWalls([]);
+    setColumns([]);
   }
 
   function handleAddWallType() {
@@ -1369,6 +1391,10 @@ if (mode !== 'wall') setSnapIndicator(null);
             刪除 {selected.length > 1 ? `(${selected.length})` : ''} [Del]
           </button>
         )}
+        <button onClick={handleClear}
+          style={{ padding: '6px 16px', background: '#1a1a1a', color: '#666', border: '1px solid #333', borderRadius: 6, cursor: 'pointer', fontSize: 13 }}>
+          清除
+        </button>
       </div>
 
       <div style={{ position: 'absolute', bottom: 16, left: 16, color: '#555', fontSize: 12 }}>{getHint()}</div>
