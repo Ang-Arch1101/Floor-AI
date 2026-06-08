@@ -320,13 +320,27 @@ function getWallGaps(wall, rawWalls) {
       wall.start.x, wall.start.y, wall.end.x, wall.end.y,
       other.start.x, other.start.y, other.end.x, other.end.y
     );
-    if (!centerHit) continue;
-    const tA = centerHit.tA, tB = centerHit.tB;
-    const tAisEndpoint = tA < ENDPOINT_EPS || tA > 1 - ENDPOINT_EPS;
-    const tBisEndpoint = tB < ENDPOINT_EPS || tB > 1 - ENDPOINT_EPS;
-    if (tAisEndpoint && tBisEndpoint) continue;
-    if (tAisEndpoint) continue;  // this wall is stub — no gap on itself
-    // tBisEndpoint: stub endpoint at our centerline — extend its offset lines by h so far face gets a gap too
+
+    if (!centerHit) {
+      // Drawn T-junction: splitByWallIntersections moves stub endpoint to our outer face,
+      // so the centerlines no longer intersect. Detect by checking if other's endpoint
+      // lies on our outer face (normalDist ≈ h).
+      const isOuterFaceT = [other.start, other.end].some(pt => {
+        const tAlong = ((pt.x - wall.start.x) * n.dx + (pt.y - wall.start.y) * n.dy) / (n.len * n.len);
+        if (tAlong < ENDPOINT_EPS || tAlong > 1 - ENDPOINT_EPS) return false;
+        const nd = Math.abs((pt.x - wall.start.x) * n.nx + (pt.y - wall.start.y) * n.ny);
+        return nd >= h - 1 && nd <= h + 2;
+      });
+      if (!isOuterFaceT) continue;
+      // Fall through to offset-line gap computation below
+    } else {
+      const tA = centerHit.tA, tB = centerHit.tB;
+      const tAisEndpoint = tA < ENDPOINT_EPS || tA > 1 - ENDPOINT_EPS;
+      const tBisEndpoint = tB < ENDPOINT_EPS || tB > 1 - ENDPOINT_EPS;
+      if (tAisEndpoint && tBisEndpoint) continue;
+      if (tAisEndpoint) continue;  // this wall is stub — no gap on itself
+      // tBisEndpoint: stub endpoint at our centerline — extend its offset lines by h so far face gets a gap too
+    }
 
     const otherPos = {
       x0: other.start.x + nO.nx * h, y0: other.start.y + nO.ny * h,
