@@ -551,12 +551,10 @@ function computeWallDragInfo(wall, wallIdx, rawWalls, columns) {
     }
     if (!connected) continue;
     const r = constraintFromOther(other);
-    console.log('constraint', {r, limitMin, limitMax, wallStartProj, otherStart: other.start, otherEnd: other.end});
     limitMin = Math.max(limitMin, r.min);
     limitMax = Math.min(limitMax, r.max);
     snapPoints.push(...r.snapPts);
   }
-  console.log('final limits', {limitMin, limitMax});
 
   for (const col of columns) {
     const { hw, hh } = getColCorners(col);
@@ -565,8 +563,8 @@ function computeWallDragInfo(wall, wallIdx, rawWalls, columns) {
       { x: col.cx - hw, y: col.cy + hh }, { x: col.cx + hw, y: col.cy + hh },
     ];
     const colConnected = [wall.start, wall.end].some(pt =>
-      Math.abs(pt.x - col.cx) <= hw + half + GRID &&
-      Math.abs(pt.y - col.cy) <= hh + half + GRID
+      Math.abs(pt.x - col.cx) <= hw + 2 &&
+      Math.abs(pt.y - col.cy) <= hh + 2
     );
     if (!colConnected) continue;
     const projs = corners.map(proj);
@@ -1063,7 +1061,6 @@ export default function App() {
         if (w.isDoor || w.isWindow) continue;
         if (!ptBetweenWallLines(rawPt, w)) continue;
         const info = computeWallDragInfo(w, i, rawWalls, columns);
-        console.log('wallDragPending candidate', i, info);  // 加這行
         if (!info) continue;
         const pending = {
           wallIdx: i,
@@ -1258,6 +1255,26 @@ if (mode !== 'wall') setSnapIndicator(null);
       return;
     }
     if (dragWall) {
+      // Snap endpoint to nearby wall endpoints to convert T→L junction
+      setRawWalls(prev => {
+        const wall = prev[dragWall.wallIdx];
+        if (!wall || wall.isDoor || wall.isWindow) return prev;
+        const EPS = THICKNESS + GRID;
+        let { start, end } = wall;
+        for (let i = 0; i < prev.length; i++) {
+          if (i === dragWall.wallIdx) continue;
+          const other = prev[i];
+          if (other.isDoor || other.isWindow) continue;
+          for (const otherPt of [other.start, other.end]) {
+            if (Math.hypot(start.x - otherPt.x, start.y - otherPt.y) < EPS) start = { x: otherPt.x, y: otherPt.y };
+            if (Math.hypot(end.x - otherPt.x, end.y - otherPt.y) < EPS) end = { x: otherPt.x, y: otherPt.y };
+          }
+        }
+        if (start === wall.start && end === wall.end) return prev;
+        const next = [...prev];
+        next[dragWall.wallIdx] = { ...wall, start, end };
+        return next;
+      });
       setDragWall(null);
       return;
     }
@@ -1275,10 +1292,12 @@ if (mode !== 'wall') setSnapIndicator(null);
     const rect = svgRef.current.getBoundingClientRect();
     const sx = e.clientX - rect.left;
     const sy = e.clientY - rect.top;
+    const svgH = svgRef.current.clientHeight;
+    const qy = svgH - sy;
     setViewTransform(prev => ({
       scale: prev.scale * factor,
       offsetX: sx - (sx - prev.offsetX) * factor,
-      offsetY: sy - (sy - prev.offsetY) * factor,
+      offsetY: qy - (qy - prev.offsetY) * factor,
     }));
   }
 
@@ -1288,7 +1307,6 @@ if (mode !== 'wall') setSnapIndicator(null);
   }
 
   function handleClick(e) {
-     console.log('handleClick fired', { mode, dragging: !!dragging, dragWall: !!dragWall });
     if (dragging) return;
     const rawPt = getRawPt(e);
     const pt = { x: snap(rawPt.x), y: snap(rawPt.y) };
@@ -1304,7 +1322,6 @@ if (mode !== 'wall') setSnapIndicator(null);
 
     if (mode === 'select') {
       const hit = hitTest(rawPt);
-       console.log('hitTest result', hit, pt);
       if (hit) {
         if (ctrlHeld) {
           setSelected(prev => isInSel(prev, hit) ? prev.filter(s => !(s.type === hit.type && s.idx === hit.idx)) : [...prev, hit]);
