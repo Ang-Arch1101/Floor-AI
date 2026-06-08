@@ -1557,6 +1557,31 @@ if (mode !== 'wall') setSnapIndicator(null);
           style={{ padding: '6px 16px', background: '#1a1a1a', color: '#666', border: '1px solid #333', borderRadius: 6, cursor: 'pointer', fontSize: 13 }}>
           清除
         </button>
+        <label style={{ padding: '6px 16px', background: '#1a1a1a', color: '#888', border: '1px solid #333', borderRadius: 6, cursor: 'pointer', fontSize: 13 }}>
+          匯入 DXF
+          <input type="file" accept=".dxf" style={{ display: 'none' }} onChange={async e => {
+            const file = e.target.files[0];
+            if (!file) return;
+            const fd = new FormData();
+            fd.append('file', file);
+            try {
+              const res = await fetch('http://localhost:5000/api/upload-dxf', { method: 'POST', body: fd });
+              const data = await res.json();
+              if (data.error) { console.error('DXF 匯入錯誤:', data.error); return; }
+              const layers = [...new Set(data.segments.map(s => s.layer))];
+              console.log('=== DXF 診斷 ===');
+              console.log('圖層:', layers);
+              console.log('線段數（合併前）:', data.raw_count);
+              console.log('線段數（合併後）:', data.merged_count);
+              console.log('減少比例:', ((1 - data.merged_count / data.raw_count) * 100).toFixed(1) + '%');
+              console.log('各圖層線段數:', layers.map(l => ({ layer: l, count: data.segments.filter(s => s.layer === l).length })));
+              console.log('完整資料:', data);
+            } catch (err) {
+              console.error('連線失敗（確認後端是否啟動）:', err);
+            }
+            e.target.value = '';
+          }} />
+        </label>
       </div>
 
       <div style={{ position: 'absolute', bottom: 16, left: 16, color: '#555', fontSize: 12 }}>{getHint()}</div>
