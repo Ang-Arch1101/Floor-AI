@@ -30,6 +30,7 @@
 |------|------|
 | **存檔** | 更新 `CLAUDE.md`、`README.md`、`docs/memory/*.md`，反映目前進度與 bug 狀態。不執行 git。 |
 | **push** | `git add` 指定檔案 → `git commit` → `git push`，把本地變更推上 GitHub。 |
+| **pull** | `git pull`，同步 GitHub 最新版到本地（手機 dispatch 後使用）。 |
 
 ---
 
