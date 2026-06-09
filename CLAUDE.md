@@ -1,19 +1,35 @@
 # FloorAI 專案快照
-> 討論時間：2026 年 6 月｜用途：帶入新對話視窗的上下文參考
+> 更新時間：2026-06-09｜用途：帶入新對話視窗的上下文參考
 
 ---
 
-## 目前進度（2026-06）
+## 目前進度（2026-06-09）
 
-**剛完成（本次 session）：**
-1. 無限畫布（pan / zoom）— 滾輪縮放、中鍵拖曳平移、世界座標系
-2. 牆端點拖拉伸長 — 選取牆段後兩端出現控制點，可拖拉移動
-3. ESC 改成兩次回到選取模式
-4. 牆 / 柱種類系統 — wallTypes / colTypes 表，可新增 / 編輯 / 刪除
-5. Ctrl+Z / Ctrl+Y 復原（最多 50 步）
-6. 儲存功能 ← **下一個**
+**已完成的功能：**
+1. ✅ 無限畫布（pan / zoom）— 滾輪縮放、中鍵拖曳平移、世界座標系
+2. ✅ 牆端點拖拉伸長 — 選取牆段後兩端出現控制點，可拖拉移動
+3. ✅ ESC 改成兩次回到選取模式
+4. ✅ 牆 / 柱種類系統 — wallTypes / colTypes 表，可新增 / 編輯 / 刪除
+5. ✅ Ctrl+Z / Ctrl+Y 復原（最多 50 步）
+6. ✅ 牆-柱 snap 退縮 — 拖曳牆時，snap 點退縮 thickness/2，使牆緣對齊柱緣
 
-**目前分支：** `claude/infinite-canvas-transform-fgKvg`
+**已知 bug（待修）：**
+- ⚠️ 輸入尺寸數字方向相反 — 選取牆段後輸入長度，牆往錯誤方向延伸
+  - 相關程式碼：`applyNewLength()`（約 877 行）、`getFixedEnd()`（約 70 行）、`WallDimAnnotation`（約 645 行）
+  - 懷疑原因：`WallDimAnnotation` 在 Y-flip 的 `<g transform>` 裡，方向判斷可能被反
+
+**下一個目標：** 修復尺寸輸入方向 bug，然後做儲存功能
+
+**目前分支：** `claude/merge-infinite-canvas-wall-anchoring`（PR #3，開啟中）
+
+---
+
+## 指令定義
+
+| 指令 | 動作 |
+|------|------|
+| **存檔** | 更新 `CLAUDE.md`、`README.md`、`docs/memory/*.md`，反映目前進度與 bug 狀態。不執行 git。 |
+| **push** | `git add` 指定檔案 → `git commit` → `git push`，把本地變更推上 GitHub。 |
 
 ---
 
@@ -152,8 +168,15 @@ worldToScreen(wx, wy) → { x: wx*scale + offsetX, y: svgH - (wy*scale + offsetY
 
 ### 已知限制（暫緩）
 - 斜牆支援：disabled
-- `computeAllMiters`, `clipStubEnd`, `getWallGaps`, `computeWallDragInfo` 仍用全域 `THICKNESS`（尚未 per-wall）
-- pan offsetY 上下方向待目視確認
+- `computeAllMiters`, `clipStubEnd`, `getWallGaps` 仍用全域 `THICKNESS`（尚未 per-wall）
+- `computeWallDragInfo` 的 limitMin/limitMax 仍用全域 `THICKNESS`（snap 退縮已 per-wall）
+
+### 待修 Bug
+- **尺寸輸入方向相反**：選取牆段 → 輸入長度數字 → 牆往錯誤方向延伸
+  - `applyNewLength()`（約 877 行）：計算新端點位置
+  - `getFixedEnd()`（約 70 行）：判斷哪端固定（T 型接合端）
+  - `WallDimAnnotation`（約 645 行）：在 Y-flip `<g transform>` 內渲染，方向可能被反
+  - 懷疑：`getFixedEnd` 回傳邏輯或 `applyNewLength` 的方向向量算反
 
 ---
 
