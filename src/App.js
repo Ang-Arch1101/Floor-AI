@@ -669,12 +669,14 @@ function WallDimAnnotation({ wall, onClickValue }) {
       <line x1={dx1} y1={dy1} x2={dx2} y2={dy2} stroke={dimColor} strokeWidth="0.8" />
       <polygon points={a1} fill={dimColor} />
       <polygon points={a2} fill={dimColor} />
-      <rect x={textX - 18} y={textY - 9} width={36} height={14} fill="#0f0f0f" rx="2" />
-      <text x={textX} y={textY + 2} textAnchor="middle" fontSize={11} fill={dimColor}
-        style={{ cursor: 'pointer', userSelect: 'none' }}
-        onClick={e => { e.stopPropagation(); onClickValue(e); }}>
-        {length}
-      </text>
+      <g transform={`translate(${textX},${textY}) scale(1,-1)`}>
+        <rect x={-18} y={-9} width={36} height={14} fill="#0f0f0f" rx="2" />
+        <text x={0} y={2} textAnchor="middle" fontSize={11} fill={dimColor}
+          style={{ cursor: 'pointer', userSelect: 'none' }}
+          onClick={e => { e.stopPropagation(); onClickValue(e); }}>
+          {length}
+        </text>
+      </g>
     </g>
   );
 }

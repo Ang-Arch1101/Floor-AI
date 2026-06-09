@@ -14,11 +14,9 @@
 6. ✅ 牆-柱 snap 退縮 — 拖曳牆時，snap 點退縮 thickness/2，使牆緣對齊柱緣
 
 **已知 bug（待修）：**
-- ⚠️ 輸入尺寸數字方向相反 — 選取牆段後輸入長度，牆往錯誤方向延伸
-  - 相關程式碼：`applyNewLength()`（約 877 行）、`getFixedEnd()`（約 70 行）、`WallDimAnnotation`（約 645 行）
-  - 懷疑原因：`WallDimAnnotation` 在 Y-flip 的 `<g transform>` 裡，方向判斷可能被反
+- （無）
 
-**下一個目標：** 修復尺寸輸入方向 bug，然後做儲存功能
+**下一個目標：** 儲存功能（匯出/載入平面圖）
 
 **目前分支：** `claude/merge-infinite-canvas-wall-anchoring`（PR #3，開啟中）
 
@@ -28,7 +26,7 @@
 
 | 指令 | 動作 |
 |------|------|
-| **存檔** | 更新 `CLAUDE.md`、`README.md`、`docs/memory/*.md`，反映目前進度與 bug 狀態。不執行 git。 |
+| **存檔** | 更新 `CLAUDE.md`、`README.md`、`docs/memory/*.md`、**`docs/code-index.md`**，反映目前進度與 bug 狀態。不執行 git。 |
 | **push** | `git add` 指定檔案 → `git commit` → `git push`，把本地變更推上 GitHub。 |
 | **pull** | `git pull`，同步 GitHub 最新版到本地（手機 dispatch 後使用）。 |
 
