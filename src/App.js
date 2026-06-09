@@ -573,7 +573,14 @@ function computeWallDragInfo(wall, wallIdx, rawWalls, columns) {
     const projs = corners.map(proj);
     limitMin = Math.max(limitMin, Math.min(...projs) - wallStartProj);
     limitMax = Math.min(limitMax, Math.max(...projs) - wallStartProj);
-    snapPoints.push(...corners, { x: col.cx, y: col.cy });
+    const h_wall = (wall.thickness ?? THICKNESS) / 2;
+    const adjustedCorners = [
+      { x: col.cx - hw + h_wall, y: col.cy - hh + h_wall },
+      { x: col.cx + hw - h_wall, y: col.cy - hh + h_wall },
+      { x: col.cx - hw + h_wall, y: col.cy + hh - h_wall },
+      { x: col.cx + hw - h_wall, y: col.cy + hh - h_wall },
+    ];
+    snapPoints.push(...adjustedCorners, { x: col.cx, y: col.cy });
   }
 
   return { normal, limitMin, limitMax, snapPoints };
