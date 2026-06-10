@@ -1,44 +1,19 @@
 # FloorAI 專案快照
-> 更新時間：2026-06-10｜用途：帶入新對話視窗的上下文參考
+> 討論時間：2026 年 6 月｜用途：帶入新對話視窗的上下文參考
 
 ---
 
-## ⚠️ Session 開啟提醒
-每次開新 session，AI 容器預設在舊分支。請先執行：
-```
-fetch + checkout claude/merge-infinite-canvas-wall-anchoring
-```
-這樣才能讀到最新的程式碼（1648 行版本）。
+## 目前進度（2026-06）
 
----
+**剛完成（本次 session）：**
+1. 無限畫布（pan / zoom）— 滾輪縮放、中鍵拖曳平移、世界座標系
+2. 牆端點拖拉伸長 — 選取牆段後兩端出現控制點，可拖拉移動
+3. ESC 改成兩次回到選取模式
+4. 牆 / 柱種類系統 — wallTypes / colTypes 表，可新增 / 編輯 / 刪除
+5. Ctrl+Z / Ctrl+Y 復原（最多 50 步）
+6. 儲存功能 ← **下一個**
 
-## 目前進度（2026-06-10）
-
-**已完成的功能：**
-1. ✅ 無限畫布（pan / zoom）— 滾輪縮放、中鍵拖曳平移、世界座標系
-2. ✅ 牆端點拖拉伸長 — 選取牆段後兩端出現控制點，可拖拉移動
-3. ✅ ESC 改成兩次回到選取模式
-4. ✅ 牆 / 柱種類系統 — wallTypes / colTypes 表，可新增 / 編輯 / 刪除
-5. ✅ Ctrl+Z / Ctrl+Y 復原（最多 50 步）
-6. ✅ 牆-柱 snap 退縮 — 拖曳牆時，snap 點退縮 thickness/2，使牆緣對齊柱緣
-7. ✅ localStorage 自動儲存 — 重整後資料保留（rawWalls / columns / wallTypes / colTypes）
-
-**已知 bug（待修）：**
-- （無）
-
-**下一個目標：** DXF 匯入（讀取現有平面圖，PR #4 `claude/dxf-import` 進行中）
-
-**目前分支：** `claude/merge-infinite-canvas-wall-anchoring`（PR #3，開啟中）
-
----
-
-## 指令定義
-
-| 指令 | 動作 |
-|------|------|
-| **存檔** | 更新 `CLAUDE.md`、`README.md`、`docs/memory/*.md`、**`docs/code-index.md`**，反映目前進度與 bug 狀態。不執行 git。 |
-| **push** | `git add` 指定檔案 → `git commit` → `git push`，把本地變更推上 GitHub。 |
-| **pull** | `git pull`，同步 GitHub 最新版到本地（手機 dispatch 後使用）。 |
+**目前分支：** `claude/infinite-canvas-transform-fgKvg`
 
 ---
 
@@ -152,7 +127,7 @@ fetch + checkout claude/merge-infinite-canvas-wall-anchoring
 screenToWorld(sx, sy) → { x: (sx - offsetX) / scale, y: (svgH - sy - offsetY) / scale }
 worldToScreen(wx, wy) → { x: wx*scale + offsetX, y: svgH - (wy*scale + offsetY) }
 ```
-**注意：** pan / zoom 行為已確認正常
+**注意：** pan offsetY 的方向在測試中待確認（上下可能需要反號）
 
 ### 牆端點拖拉
 - 選取單一牆段 → 兩端出現綠色控制點（r=6，固定像素大小）
@@ -177,15 +152,8 @@ worldToScreen(wx, wy) → { x: wx*scale + offsetX, y: svgH - (wy*scale + offsetY
 
 ### 已知限制（暫緩）
 - 斜牆支援：disabled
-- `computeAllMiters`, `clipStubEnd`, `getWallGaps` 仍用全域 `THICKNESS`（尚未 per-wall）
-- `computeWallDragInfo` 的 limitMin/limitMax 仍用全域 `THICKNESS`（snap 退縮已 per-wall）
-
-### 待修 Bug
-- **尺寸輸入方向相反**：選取牆段 → 輸入長度數字 → 牆往錯誤方向延伸
-  - `applyNewLength()`（約 877 行）：計算新端點位置
-  - `getFixedEnd()`（約 70 行）：判斷哪端固定（T 型接合端）
-  - `WallDimAnnotation`（約 645 行）：在 Y-flip `<g transform>` 內渲染，方向可能被反
-  - 懷疑：`getFixedEnd` 回傳邏輯或 `applyNewLength` 的方向向量算反
+- `computeAllMiters`, `clipStubEnd`, `getWallGaps`, `computeWallDragInfo` 仍用全域 `THICKNESS`（尚未 per-wall）
+- pan offsetY 上下方向待目視確認
 
 ---
 
