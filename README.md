@@ -1,70 +1,52 @@
-# Getting Started with Create React App
+# FloorAI
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+AutoCAD 平面修改加速器 — 比 CAD 聰明、比 Revit 輕量。
 
-## Available Scripts
+牆、門、窗、柱是有語意的物件，可拖拉點選操作，輸出乾淨的 CAD 線條直接寫入 AutoCAD。
 
-In the project directory, you can run:
+---
 
-### `npm start`
+## 啟動方式
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in your browser.
+```bash
+npm start
+```
 
-The page will reload when you make changes.\
-You may also see any lint errors in the console.
+開啟 http://localhost:3000
 
-### `npm test`
+---
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+## 操作快捷鍵
 
-### `npm run build`
+| 按鍵 | 功能 |
+|------|------|
+| W | 畫牆模式 |
+| C | 放柱模式 |
+| D | 放門模式 |
+| N | 放窗模式 |
+| ESC | 回到選取模式（按兩次確保退出） |
+| Space | 旋轉柱（放柱模式中） |
+| Delete | 刪除選取物件 |
+| Ctrl+Z | 復原（最多 50 步） |
+| Ctrl+Y | 重做 |
+| 滾輪 | 縮放畫布 |
+| 中鍵拖曳 | 平移畫布 |
 
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
+---
 
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
+## 技術架構
 
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
+| 層級 | 技術 |
+|------|------|
+| 前端 | React（`src/App.js` 單檔） |
+| 後端 | Python + Flask |
+| CAD 整合 | pywin32 COM API |
 
-### `npm run eject`
+---
 
-**Note: this is a one-way operation. Once you `eject`, you can't go back!**
+## 目前分支
 
-If you aren't satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
+- `master`：穩定版
+- `claude/merge-infinite-canvas-wall-anchoring`：開發中（PR #3）
 
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you're on your own.
-
-You don't have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn't feel obligated to use this feature. However we understand that this tool wouldn't be useful if you couldn't customize it when you are ready for it.
-
-## Learn More
-
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
-
-To learn React, check out the [React documentation](https://reactjs.org/).
-
-### Code Splitting
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/code-splitting](https://facebook.github.io/create-react-app/docs/code-splitting)
-
-### Analyzing the Bundle Size
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size](https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size)
-
-### Making a Progressive Web App
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app](https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app)
-
-### Advanced Configuration
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/advanced-configuration](https://facebook.github.io/create-react-app/docs/advanced-configuration)
-
-### Deployment
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/deployment](https://facebook.github.io/create-react-app/docs/deployment)
-
-### `npm run build` fails to minify
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
+詳細開發紀錄見 [CLAUDE.md](./CLAUDE.md)
