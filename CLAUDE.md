@@ -1,9 +1,18 @@
 # FloorAI 專案快照
-> 更新時間：2026-06-09｜用途：帶入新對話視窗的上下文參考
+> 更新時間：2026-06-10｜用途：帶入新對話視窗的上下文參考
 
 ---
 
-## 目前進度（2026-06-09）
+## ⚠️ Session 開啟提醒
+每次開新 session，AI 容器預設在舊分支。請先執行：
+```
+fetch + checkout claude/merge-infinite-canvas-wall-anchoring
+```
+這樣才能讀到最新的程式碼（1648 行版本）。
+
+---
+
+## 目前進度（2026-06-10）
 
 **已完成的功能：**
 1. ✅ 無限畫布（pan / zoom）— 滾輪縮放、中鍵拖曳平移、世界座標系
@@ -12,11 +21,12 @@
 4. ✅ 牆 / 柱種類系統 — wallTypes / colTypes 表，可新增 / 編輯 / 刪除
 5. ✅ Ctrl+Z / Ctrl+Y 復原（最多 50 步）
 6. ✅ 牆-柱 snap 退縮 — 拖曳牆時，snap 點退縮 thickness/2，使牆緣對齊柱緣
+7. ✅ localStorage 自動儲存 — 重整後資料保留（rawWalls / columns / wallTypes / colTypes）
 
 **已知 bug（待修）：**
 - （無）
 
-**下一個目標：** 儲存功能（匯出/載入平面圖）
+**下一個目標：** DXF 匯入（讀取現有平面圖，PR #4 `claude/dxf-import` 進行中）
 
 **目前分支：** `claude/merge-infinite-canvas-wall-anchoring`（PR #3，開啟中）
 
@@ -142,7 +152,7 @@
 screenToWorld(sx, sy) → { x: (sx - offsetX) / scale, y: (svgH - sy - offsetY) / scale }
 worldToScreen(wx, wy) → { x: wx*scale + offsetX, y: svgH - (wy*scale + offsetY) }
 ```
-**注意：** pan offsetY 的方向在測試中待確認（上下可能需要反號）
+**注意：** pan / zoom 行為已確認正常
 
 ### 牆端點拖拉
 - 選取單一牆段 → 兩端出現綠色控制點（r=6，固定像素大小）
