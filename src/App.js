@@ -948,17 +948,18 @@ export default function App() {
   function handleAccept() {
     if (pendingChanges.length === 0) return;
     saveHistory();
+    const snapPt = (p) => ({ x: snap(p.x), y: snap(p.y) });
     const newWalls = pendingChanges
       .filter(s => s.type === 'wall')
       .map(s => {
         const wt = wallTypes.find(t => t.id === s.typeId) ?? wallTypes[0];
-        return { start: s.start, end: s.end, typeId: wt.id, thickness: wt.thickness };
+        return { start: snapPt(s.start), end: snapPt(s.end), typeId: wt.id, thickness: wt.thickness };
       });
     const newCols = pendingChanges
       .filter(s => s.type === 'column')
       .map(s => {
         const ct = colTypes.find(t => t.id === s.typeId) ?? colTypes[0];
-        return { cx: s.cx, cy: s.cy, type: s.colType ?? 'rc', rotated: s.rotated ?? false, typeId: ct.id, w: ct.w, h: ct.h };
+        return { cx: snap(s.cx), cy: snap(s.cy), type: s.colType ?? 'rc', rotated: s.rotated ?? false, typeId: ct.id, w: ct.w, h: ct.h };
       });
     const openings = pendingChanges.filter(s => s.type === 'door' || s.type === 'window');
     setRawWalls(prev => {
