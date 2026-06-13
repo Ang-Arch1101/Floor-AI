@@ -50,6 +50,7 @@ def ai_suggest():
 
     instruction = data.get("instruction", "")
     context = data.get("context", {})
+    history = data.get("history", [])
 
     if not instruction:
         return jsonify({"error": "Missing instruction"}), 400
@@ -59,11 +60,18 @@ def ai_suggest():
 目前畫布範圍內的物件：
 {json.dumps(context, ensure_ascii=False, indent=2)}"""
 
+    messages = []
+    for m in history:
+        role, content = m.get("role"), m.get("content")
+        if role in ("user", "assistant") and content:
+            messages.append({"role": role, "content": content})
+    messages.append({"role": "user", "content": user_message})
+
     response = client.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=2048,
         system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": user_message}],
+        messages=messages,
     )
 
     raw = response.content[0].text.strip()

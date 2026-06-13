@@ -89,25 +89,41 @@ function getFixedEnd(wall, rawWalls) {
   return 'center';
 }
 
-function placeOpening(walls, wallIdx, clickPt, type, flipped = false) {
-  const wall = walls[wallIdx];
+function buildOpeningObj(wall, clickPt, type, flipped = false) {
   const n = getNorm(wall.start, wall.end);
-  if (!n) return walls;
+  if (!n) return null;
   const WIDTH = type === 'door' ? DOOR_WIDTH : WINDOW_WIDTH;
   const halfT = (WIDTH / 2) / n.len;
   let t = projectOnWall(clickPt, wall);
   t = Math.max(halfT, Math.min(1 - halfT, t));
   const tA = t - halfT, tB = t + halfT;
-  if (tA < 0 || tB > 1) return walls;
+  if (tA < 0 || tB > 1) return null;
   const ptA = { x: wall.start.x + tA * n.dx, y: wall.start.y + tA * n.dy };
   const ptB = { x: wall.start.x + tB * n.dx, y: wall.start.y + tB * n.dy };
-  const obj = {
+  return {
     [type === 'door' ? 'isDoor' : 'isWindow']: true,
     ptA, ptB, nx: n.nx, ny: n.ny,
     ux: n.dx / n.len, uy: n.dy / n.len, flipped,
   };
+}
+
+const OPENING_SNAP_MM = 60;
+function resolveOpeningWall(walls, pt) {
+  let best = -1, bestD = Infinity;
+  walls.forEach((w, i) => {
+    if (w.isDoor || w.isWindow || !w.start) return;
+    const d = distToWall(pt, w);
+    if (d < bestD) { bestD = d; best = i; }
+  });
+  return bestD <= OPENING_SNAP_MM ? best : -1;
+}
+
+function placeOpening(walls, wallIdx, clickPt, type, flipped = false) {
+  const wall = walls[wallIdx];
+  const obj = buildOpeningObj(wall, clickPt, type, flipped);
+  if (!obj) return walls;
   const next = [...walls];
-  next.splice(wallIdx, 1, { start: wall.start, end: ptA }, obj, { start: ptB, end: wall.end });
+  next.splice(wallIdx, 1, { start: wall.start, end: obj.ptA }, obj, { start: obj.ptB, end: wall.end });
   return next;
 }
 
@@ -910,13 +926,14 @@ export default function App() {
     const svgW = svgRef.current?.clientWidth ?? 800;
     const svgH = svgRef.current?.clientHeight ?? 600;
     const context = buildViewportContext(rawWalls, columns, wallTypes, colTypes, viewTransform, svgW, svgH);
+    const history = aiMessages;
     setAiMessages(prev => [...prev, { role: 'user', content: instruction }]);
     setAiLoading(true);
     try {
       const res = await fetch('/api/ai/suggest', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ instruction, context }),
+        body: JSON.stringify({ instruction, context, history }),
       });
       const data = await res.json();
       setAiMessages(prev => [...prev, { role: 'assistant', content: data.message ?? '（無回應）' }]);
@@ -943,7 +960,16 @@ export default function App() {
         const ct = colTypes.find(t => t.id === s.typeId) ?? colTypes[0];
         return { cx: s.cx, cy: s.cy, type: s.colType ?? 'rc', rotated: s.rotated ?? false, typeId: ct.id, w: ct.w, h: ct.h };
       });
-    setRawWalls(prev => [...prev, ...newWalls]);
+    const openings = pendingChanges.filter(s => s.type === 'door' || s.type === 'window');
+    setRawWalls(prev => {
+      let next = [...prev, ...newWalls];
+      for (const s of openings) {
+        if (!s.position) continue;
+        const idx = resolveOpeningWall(next, s.position);
+        if (idx !== -1) next = placeOpening(next, idx, s.position, s.type, s.flipped ?? false);
+      }
+      return next;
+    });
     setColumns(prev => [...prev, ...newCols]);
     setPendingChanges([]);
   }
@@ -1691,6 +1717,17 @@ if (mode !== 'wall') setSnapIndicator(null);
               return (
                 <rect key={`pending-${i}`} x={s.cx - hw} y={s.cy - hh} width={s.w ?? 80} height={s.h ?? 100}
                   fill="#ffaa0015" stroke="#ffaa00" strokeWidth="1.5" strokeDasharray="8,5" opacity={0.5} />
+              );
+            }
+            if ((s.type === 'door' || s.type === 'window') && s.position) {
+              const idx = resolveOpeningWall(rawWalls, s.position);
+              if (idx === -1) return null;
+              const obj = buildOpeningObj(rawWalls[idx], s.position, s.type, s.flipped ?? false);
+              if (!obj) return null;
+              return (
+                <g key={`pending-${i}`} opacity={0.5}>
+                  {s.type === 'door' ? <DoorSegment door={obj} isPreview /> : <WindowSegment win={obj} isPreview />}
+                </g>
               );
             }
             return null;
