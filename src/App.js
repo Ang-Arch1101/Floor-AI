@@ -1,4 +1,5 @@
 import React, { useRef, useState, useEffect, useMemo } from 'react';
+import AIPanel from './AIPanel';
 
 const GRID = 20;
 const THICKNESS = 15;
@@ -760,6 +761,30 @@ function FlipIcon({ obj }) {
 
 function isInSel(selected, item) { return selected.some(s => s.type === item.type && s.idx === item.idx); }
 
+function buildViewportContext(rawWalls, columns, wallTypes, colTypes, viewTransform, svgW, svgH) {
+  const { scale, offsetX, offsetY } = viewTransform;
+  const bufW = svgW * 0.2, bufH = svgH * 0.2;
+  const toWorld = (sx, sy) => ({ x: (sx - offsetX) / scale, y: (svgH - sy - offsetY) / scale });
+  const tl = toWorld(-bufW, -bufH);
+  const br = toWorld(svgW + bufW, svgH + bufH);
+  const minX = Math.min(tl.x, br.x), maxX = Math.max(tl.x, br.x);
+  const minY = Math.min(tl.y, br.y), maxY = Math.max(tl.y, br.y);
+  const inBounds = (p) => p && p.x >= minX && p.x <= maxX && p.y >= minY && p.y <= maxY;
+  const filteredWalls = rawWalls.filter(w => {
+    const pts = w.start ? [w.start, w.end] : [w.ptA, w.ptB];
+    return pts.some(inBounds);
+  });
+  const filteredCols = columns.filter(c => inBounds({ x: c.cx, y: c.cy }));
+  const usedWtIds = new Set(filteredWalls.map(w => w.typeId).filter(Boolean));
+  const usedCtIds = new Set(filteredCols.map(c => c.typeId).filter(Boolean));
+  return {
+    walls: filteredWalls,
+    columns: filteredCols,
+    wallTypes: wallTypes.filter(t => usedWtIds.has(t.id)),
+    colTypes: colTypes.filter(t => usedCtIds.has(t.id)),
+  };
+}
+
 const PLACE_MODES = [
   { key: 'column', label: '柱 [C]' },
   { key: 'wall',   label: '牆 [W]' },
@@ -812,6 +837,9 @@ export default function App() {
   const [editingColTypeForm, setEditingColTypeForm] = useState({});
   const [history, setHistory] = useState([]);
   const [future, setFuture] = useState([]);
+  const [aiMessages, setAiMessages] = useState([]);
+  const [pendingChanges, setPendingChanges] = useState([]);
+  const [aiLoading, setAiLoading] = useState(false);
 
   const wallMiters = useMemo(() => computeAllMiters(rawWalls), [rawWalls]);
 
@@ -876,6 +904,52 @@ export default function App() {
     setRawWalls(future[0].rawWalls);
     setColumns(future[0].columns);
     setFuture(f => f.slice(1));
+  }
+
+  async function handleAISend(instruction) {
+    const svgW = svgRef.current?.clientWidth ?? 800;
+    const svgH = svgRef.current?.clientHeight ?? 600;
+    const context = buildViewportContext(rawWalls, columns, wallTypes, colTypes, viewTransform, svgW, svgH);
+    setAiMessages(prev => [...prev, { role: 'user', content: instruction }]);
+    setAiLoading(true);
+    try {
+      const res = await fetch('/api/ai/suggest', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ instruction, context }),
+      });
+      const data = await res.json();
+      setAiMessages(prev => [...prev, { role: 'assistant', content: data.message ?? '（無回應）' }]);
+      setPendingChanges(data.suggestions ?? []);
+    } catch {
+      setAiMessages(prev => [...prev, { role: 'assistant', content: '錯誤：無法連線後端，請確認 Flask 伺服器已啟動。' }]);
+    } finally {
+      setAiLoading(false);
+    }
+  }
+
+  function handleAccept() {
+    if (pendingChanges.length === 0) return;
+    saveHistory();
+    const newWalls = pendingChanges
+      .filter(s => s.type === 'wall')
+      .map(s => {
+        const wt = wallTypes.find(t => t.id === s.typeId) ?? wallTypes[0];
+        return { start: s.start, end: s.end, typeId: wt.id, thickness: wt.thickness };
+      });
+    const newCols = pendingChanges
+      .filter(s => s.type === 'column')
+      .map(s => {
+        const ct = colTypes.find(t => t.id === s.typeId) ?? colTypes[0];
+        return { cx: s.cx, cy: s.cy, type: s.colType ?? 'rc', rotated: s.rotated ?? false, typeId: ct.id, w: ct.w, h: ct.h };
+      });
+    setRawWalls(prev => [...prev, ...newWalls]);
+    setColumns(prev => [...prev, ...newCols]);
+    setPendingChanges([]);
+  }
+
+  function handleReject() {
+    setPendingChanges([]);
   }
 
   function applyNewLength(wallIdx, newLen) {
@@ -1561,6 +1635,15 @@ if (mode !== 'wall') setSnapIndicator(null);
 
       <div style={{ position: 'absolute', bottom: 16, left: 16, color: '#555', fontSize: 12 }}>{getHint()}</div>
 
+      <AIPanel
+        messages={aiMessages}
+        onSend={handleAISend}
+        pendingChanges={pendingChanges}
+        onAccept={handleAccept}
+        onReject={handleReject}
+        isLoading={aiLoading}
+      />
+
       <svg ref={svgRef}
         style={{ width: '100%', height: '100%', cursor: panning ? 'grabbing' : dragging ? 'grabbing' : 'crosshair', touchAction: 'none' }}
         onClick={handleClick} onMouseMove={handleMouseMove} onMouseDown={handleMouseDown} onMouseUp={handleMouseUp} onWheel={handleWheel}>
@@ -1589,6 +1672,28 @@ if (mode !== 'wall') setSnapIndicator(null);
             if (w.isDoor) return <DoorSegment key={i} door={w} isSelected={isSel} />;
             if (w.isWindow) return <WindowSegment key={i} win={w} isSelected={isSel} />;
             return <WallSegment key={i} wall={w} isSelected={isSel} columns={columns} miter={wallMiters[i] || {}} rawWalls={rawWalls} />;
+          })}
+
+          {pendingChanges.map((s, i) => {
+            if (s.type === 'wall') {
+              const wt = wallTypes.find(t => t.id === s.typeId);
+              const lines = computeWallLines(s.start, s.end, wt?.thickness ?? THICKNESS);
+              if (!lines) return null;
+              return (
+                <g key={`pending-${i}`} opacity={0.5}>
+                  <line {...lines.line1} stroke="#ffaa00" strokeWidth="1.5" strokeDasharray="8,5" />
+                  <line {...lines.line2} stroke="#ffaa00" strokeWidth="1.5" strokeDasharray="8,5" />
+                </g>
+              );
+            }
+            if (s.type === 'column') {
+              const hw = (s.w ?? 80) / 2, hh = (s.h ?? 100) / 2;
+              return (
+                <rect key={`pending-${i}`} x={s.cx - hw} y={s.cy - hh} width={s.w ?? 80} height={s.h ?? 100}
+                  fill="#ffaa0015" stroke="#ffaa00" strokeWidth="1.5" strokeDasharray="8,5" opacity={0.5} />
+              );
+            }
+            return null;
           })}
 
           {mode === 'select' && singleSel?.type === 'rawWall' && selWallObj && !selWallObj.isDoor && !selWallObj.isWindow && !dragWall && (
