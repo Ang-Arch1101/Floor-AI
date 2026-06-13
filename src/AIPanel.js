@@ -3,6 +3,7 @@ import React, { useState, useRef, useEffect } from 'react';
 const PANEL_WIDTH = 280;
 
 function describeItem(s) {
+  if (s.description) return s.description;
   switch (s.type) {
     case 'wall':
       return `新增牆 (${Math.round(s.start?.x ?? 0)},${Math.round(s.start?.y ?? 0)})→(${Math.round(s.end?.x ?? 0)},${Math.round(s.end?.y ?? 0)})`;

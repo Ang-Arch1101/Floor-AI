@@ -63,6 +63,7 @@ SUGGEST_TOOL = {
                                 "type": {"type": "string", "enum": ["wall"]},
                                 "start": _pt, "end": _pt,
                                 "typeId": {"type": "string"},
+                                "description": {"type": "string", "description": "一句繁體中文說明，例如「在北側新增一道 2m 隔間牆」"},
                             }
                         },
                         {
@@ -75,6 +76,7 @@ SUGGEST_TOOL = {
                                 "rotated": {"type": "boolean"},
                                 "typeId": {"type": "string"},
                                 "w": {"type": "number"}, "h": {"type": "number"},
+                                "description": {"type": "string", "description": "一句繁體中文說明，例如「在房間角落新增 RC 柱」"},
                             }
                         },
                         {
@@ -84,6 +86,7 @@ SUGGEST_TOOL = {
                                 "type": {"type": "string", "enum": ["door", "window"]},
                                 "position": _pt,
                                 "flipped": {"type": "boolean"},
+                                "description": {"type": "string", "description": "一句繁體中文說明，例如「在南側牆面開一扇門」"},
                             }
                         },
                         {
@@ -103,7 +106,8 @@ SUGGEST_TOOL = {
                                         "thickness": {"type": "number"},
                                         "rotated": {"type": "boolean"},
                                     }
-                                }
+                                },
+                                "description": {"type": "string", "description": "一句繁體中文說明，例如「將東側牆延長至 3000mm」"},
                             }
                         },
                         {
@@ -113,6 +117,7 @@ SUGGEST_TOOL = {
                                 "type": {"type": "string", "enum": ["delete"]},
                                 "id": {"type": "string"},
                                 "objectType": {"type": "string", "enum": ["wall", "column", "door", "window"]},
+                                "description": {"type": "string", "description": "一句繁體中文說明，例如「移除多餘的短牆段」"},
                             }
                         },
                     ]
