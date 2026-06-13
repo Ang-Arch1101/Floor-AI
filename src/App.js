@@ -12,6 +12,7 @@ const COL_W = 80;
 const COL_H = 100;
 
 function snap(v) { return Math.round(v / GRID) * GRID; }
+function genId() { return Math.random().toString(36).slice(2, 9); }
 
 function applyOrthoLock(pt, ref) {
   const dx = pt.x - ref.x, dy = pt.y - ref.y;
@@ -101,6 +102,7 @@ function buildOpeningObj(wall, clickPt, type, flipped = false) {
   const ptA = { x: wall.start.x + tA * n.dx, y: wall.start.y + tA * n.dy };
   const ptB = { x: wall.start.x + tB * n.dx, y: wall.start.y + tB * n.dy };
   return {
+    id: genId(),
     [type === 'door' ? 'isDoor' : 'isWindow']: true,
     ptA, ptB, nx: n.nx, ny: n.ny,
     ux: n.dx / n.len, uy: n.dy / n.len, flipped,
@@ -810,10 +812,16 @@ const PLACE_MODES = [
 
 export default function App() {
   const [rawWalls, setRawWalls] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('floorAI_rawWalls') ?? 'null') ?? []; } catch { return []; }
+    try {
+      const stored = JSON.parse(localStorage.getItem('floorAI_rawWalls') ?? 'null') ?? [];
+      return stored.map(w => w.id ? w : { ...w, id: genId() });
+    } catch { return []; }
   });
   const [columns, setColumns] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('floorAI_columns') ?? 'null') ?? []; } catch { return []; }
+    try {
+      const stored = JSON.parse(localStorage.getItem('floorAI_columns') ?? 'null') ?? [];
+      return stored.map(c => c.id ? c : { ...c, id: genId() });
+    } catch { return []; }
   });
   const [startPt, setStartPt] = useState(null);
   const [cursor, setCursor] = useState(null);
@@ -926,6 +934,13 @@ export default function App() {
     const svgW = svgRef.current?.clientWidth ?? 800;
     const svgH = svgRef.current?.clientHeight ?? 600;
     const context = buildViewportContext(rawWalls, columns, wallTypes, colTypes, viewTransform, svgW, svgH);
+    if (selected.length > 0) {
+      context.selectedObjects = selected.map(s => {
+        if (s.type === 'rawWall') return rawWalls[s.idx];
+        if (s.type === 'col') return columns[s.idx];
+        return null;
+      }).filter(Boolean);
+    }
     const history = aiMessages;
     setAiMessages(prev => [...prev, { role: 'user', content: instruction }]);
     setAiLoading(true);
@@ -945,25 +960,39 @@ export default function App() {
     }
   }
 
-  function handleAccept() {
-    if (pendingChanges.length === 0) return;
+  function handleAccept(items) {
+    if (!items || items.length === 0) return;
     saveHistory();
     const snapPt = (p) => ({ x: snap(p.x), y: snap(p.y) });
-    const newWalls = pendingChanges
-      .filter(s => s.type === 'wall')
-      .map(s => {
-        const wt = wallTypes.find(t => t.id === s.typeId) ?? wallTypes[0];
-        return { start: snapPt(s.start), end: snapPt(s.end), typeId: wt.id, thickness: wt.thickness };
-      });
-    const newCols = pendingChanges
-      .filter(s => s.type === 'column')
-      .map(s => {
-        const ct = colTypes.find(t => t.id === s.typeId) ?? colTypes[0];
-        return { cx: snap(s.cx), cy: snap(s.cy), type: s.colType ?? 'rc', rotated: s.rotated ?? false, typeId: ct.id, w: ct.w, h: ct.h };
-      });
-    const openings = pendingChanges.filter(s => s.type === 'door' || s.type === 'window');
+    const snapChanges = (ch) => {
+      const r = { ...ch };
+      if (r.start) r.start = snapPt(r.start);
+      if (r.end) r.end = snapPt(r.end);
+      if (r.cx !== undefined) r.cx = snap(r.cx);
+      if (r.cy !== undefined) r.cy = snap(r.cy);
+      return r;
+    };
+    const addWalls = items.filter(s => s.type === 'wall').map(s => {
+      const wt = wallTypes.find(t => t.id === s.typeId) ?? wallTypes[0];
+      return { id: genId(), start: snapPt(s.start), end: snapPt(s.end), typeId: wt.id, thickness: wt.thickness };
+    });
+    const addCols = items.filter(s => s.type === 'column').map(s => {
+      const ct = colTypes.find(t => t.id === s.typeId) ?? colTypes[0];
+      return { id: genId(), cx: snap(s.cx), cy: snap(s.cy), type: s.colType ?? 'rc', rotated: s.rotated ?? false, typeId: ct.id, w: ct.w, h: ct.h };
+    });
+    const openings = items.filter(s => s.type === 'door' || s.type === 'window');
+    const modifyOps = items.filter(s => s.type === 'modify');
+    const deleteOps = items.filter(s => s.type === 'delete');
+
     setRawWalls(prev => {
-      let next = [...prev, ...newWalls];
+      let next = [...prev, ...addWalls];
+      for (const op of modifyOps) {
+        if (op.objectType === 'column') continue;
+        const idx = next.findIndex(w => w.id === op.id);
+        if (idx !== -1) next = [...next.slice(0, idx), { ...next[idx], ...snapChanges(op.changes ?? {}) }, ...next.slice(idx + 1)];
+      }
+      const delWallIds = new Set(deleteOps.filter(op => op.objectType !== 'column').map(op => op.id));
+      if (delWallIds.size) next = next.filter(w => !w.id || !delWallIds.has(w.id));
       for (const s of openings) {
         if (!s.position) continue;
         const idx = resolveOpeningWall(next, s.position);
@@ -971,7 +1000,17 @@ export default function App() {
       }
       return next;
     });
-    setColumns(prev => [...prev, ...newCols]);
+    setColumns(prev => {
+      let next = [...prev, ...addCols];
+      for (const op of modifyOps) {
+        if (op.objectType !== 'column') continue;
+        const idx = next.findIndex(c => c.id === op.id);
+        if (idx !== -1) next = [...next.slice(0, idx), { ...next[idx], ...snapChanges(op.changes ?? {}) }, ...next.slice(idx + 1)];
+      }
+      const delColIds = new Set(deleteOps.filter(op => op.objectType === 'column').map(op => op.id));
+      if (delColIds.size) next = next.filter(c => !c.id || !delColIds.has(c.id));
+      return next;
+    });
     setPendingChanges([]);
   }
 
@@ -1452,7 +1491,7 @@ if (mode !== 'wall') setSnapIndicator(null);
 
     if (mode === 'column') {
       const ct = colTypes.find(t => t.id === activeColTypeId);
-      const newCol = { cx: pt.x, cy: pt.y, type: colType, rotated: previewRotated, typeId: activeColTypeId, w: ct?.w ?? COL_W, h: ct?.h ?? COL_H };
+      const newCol = { id: genId(), cx: pt.x, cy: pt.y, type: colType, rotated: previewRotated, typeId: activeColTypeId, w: ct?.w ?? COL_W, h: ct?.h ?? COL_H };
       saveHistory();
       setRawWalls(prev => splitAllWallsByColumn(prev, newCol));
       setColumns(prev => [...prev, newCol]);
@@ -1475,7 +1514,7 @@ if (mode !== 'wall') setSnapIndicator(null);
           for (const seg of colSegs) {
             const { newSegments, updatedWalls } = splitByWallIntersections(seg, current);
             current = updatedWalls;
-            allNewSegs.push(...newSegments.map(s => ({ ...s, typeId: activeWallTypeId, thickness: wallThickness })));
+            allNewSegs.push(...newSegments.map(s => ({ ...s, id: genId(), typeId: activeWallTypeId, thickness: wallThickness })));
           }
           return [...current, ...allNewSegs];
         });
@@ -1728,6 +1767,46 @@ if (mode !== 'wall') setSnapIndicator(null);
               return (
                 <g key={`pending-${i}`} opacity={0.5}>
                   {s.type === 'door' ? <DoorSegment door={obj} isPreview /> : <WindowSegment win={obj} isPreview />}
+                </g>
+              );
+            }
+            if (s.type === 'modify') {
+              if (s.objectType === 'column') {
+                const orig = columns.find(c => c.id === s.id);
+                if (!orig) return null;
+                const m = { ...orig, ...(s.changes ?? {}) };
+                const hw = (m.w ?? 80) / 2, hh = (m.h ?? 100) / 2;
+                return <rect key={`pending-${i}`} x={m.cx - hw} y={m.cy - hh} width={m.w ?? 80} height={m.h ?? 100}
+                  fill="#ffaa0015" stroke="#ffaa00" strokeWidth="1.5" strokeDasharray="8,5" opacity={0.5} />;
+              }
+              const orig = rawWalls.find(w => w.id === s.id);
+              if (!orig || orig.isDoor || orig.isWindow) return null;
+              const m = { ...orig, ...(s.changes ?? {}) };
+              const lines = computeWallLines(m.start, m.end, m.thickness ?? THICKNESS);
+              if (!lines) return null;
+              return (
+                <g key={`pending-${i}`} opacity={0.5}>
+                  <line {...lines.line1} stroke="#ffaa00" strokeWidth="1.5" strokeDasharray="8,5" />
+                  <line {...lines.line2} stroke="#ffaa00" strokeWidth="1.5" strokeDasharray="8,5" />
+                </g>
+              );
+            }
+            if (s.type === 'delete') {
+              if (s.objectType === 'column') {
+                const orig = columns.find(c => c.id === s.id);
+                if (!orig) return null;
+                const hw = (orig.w ?? 80) / 2, hh = (orig.h ?? 100) / 2;
+                return <rect key={`pending-${i}`} x={orig.cx - hw} y={orig.cy - hh} width={orig.w ?? 80} height={orig.h ?? 100}
+                  fill="#ff446615" stroke="#ff4466" strokeWidth="1.5" strokeDasharray="5,5" opacity={0.45} />;
+              }
+              const orig = rawWalls.find(w => w.id === s.id);
+              if (!orig || orig.isDoor || orig.isWindow) return null;
+              const lines = computeWallLines(orig.start, orig.end, orig.thickness ?? THICKNESS);
+              if (!lines) return null;
+              return (
+                <g key={`pending-${i}`} opacity={0.45}>
+                  <line {...lines.line1} stroke="#ff4466" strokeWidth="1.5" strokeDasharray="5,5" />
+                  <line {...lines.line2} stroke="#ff4466" strokeWidth="1.5" strokeDasharray="5,5" />
                 </g>
               );
             }
