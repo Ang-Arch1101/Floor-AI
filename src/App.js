@@ -907,7 +907,35 @@ export default function App() {
     localStorage.setItem('floorAI_columns', JSON.stringify(columns));
     localStorage.setItem('floorAI_wallTypes', JSON.stringify(wallTypes));
     localStorage.setItem('floorAI_colTypes', JSON.stringify(colTypes));
+    // sync to server for MCP access
+    fetch('/api/state', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rawWalls, columns, wallTypes, colTypes }),
+    }).catch(() => {});
   }, [rawWalls, columns, wallTypes, colTypes]);
+
+  // poll for external changes made via MCP
+  useEffect(() => {
+    const poll = setInterval(async () => {
+      try {
+        const res = await fetch('/api/state');
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!data.rawWalls) return;
+        setRawWalls(prev => {
+          const next = data.rawWalls.map(w => w.id ? w : { ...w, id: genId() });
+          return JSON.stringify(next) !== JSON.stringify(prev) ? next : prev;
+        });
+        setColumns(prev => {
+          const next = data.columns.map(c => c.id ? c : { ...c, id: genId() });
+          return JSON.stringify(next) !== JSON.stringify(prev) ? next : prev;
+        });
+      } catch {}
+    }, 2000);
+    return () => clearInterval(poll);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function saveHistory() {
     setHistory(prev => [...prev.slice(-49), { rawWalls, columns }]);

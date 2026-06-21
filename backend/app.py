@@ -2,19 +2,40 @@ import os
 import json
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from anthropic import Anthropic
 from dotenv import load_dotenv
 
 load_dotenv()
 
-_api_key = os.environ.get("ANTHROPIC_API_KEY")
-if not _api_key:
-    raise RuntimeError("ANTHROPIC_API_KEY is not set. Create backend/.env with your key.")
-
 app = Flask(__name__)
 CORS(app, origins=["http://localhost:3000"])
 
-client = Anthropic(api_key=_api_key)
+STATE_FILE = os.path.join(os.path.dirname(__file__), "floor_plan.json")
+
+
+def _read_state():
+    if not os.path.exists(STATE_FILE):
+        return {"rawWalls": [], "columns": [], "wallTypes": [], "colTypes": []}
+    with open(STATE_FILE, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _write_state(data):
+    with open(STATE_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+@app.route("/api/state", methods=["GET"])
+def get_state():
+    return jsonify(_read_state())
+
+
+@app.route("/api/state", methods=["POST"])
+def set_state():
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "Missing body"}), 400
+    _write_state(data)
+    return jsonify({"ok": True})
 
 SYSTEM_PROMPT = """你是一個建築平面設計 AI 助手。使用者會提供目前畫布上的物件（walls, columns）和種類表（wallTypes, colTypes），以及一個操作指令。
 請根據指令，呼叫 suggest_objects 工具回傳需要執行的操作清單。
@@ -130,6 +151,13 @@ SUGGEST_TOOL = {
 
 @app.route("/api/ai/suggest", methods=["POST"])
 def ai_suggest():
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        return jsonify({"error": "ANTHROPIC_API_KEY 未設定。請在 backend/.env 填入 API key，或改用 MCP 模式（不需要 key）。", "suggestions": []}), 503
+
+    from anthropic import Anthropic
+    client = Anthropic(api_key=api_key)
+
     data = request.get_json()
     if not data:
         return jsonify({"error": "Missing request body"}), 400
