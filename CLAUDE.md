@@ -11,9 +11,10 @@
 3. ESC 改成兩次回到選取模式
 4. 牆 / 柱種類系統 — wallTypes / colTypes 表，可新增 / 編輯 / 刪除
 5. Ctrl+Z / Ctrl+Y 復原（最多 50 步）
-6. 儲存功能 ← **下一個**
+6. MCP server — Claude Code 本機可直接用對話控制畫布（add_wall / add_column / modify / delete）
+7. 儲存功能 ← **下一個**
 
-**目前分支：** `claude/infinite-canvas-transform-fgKvg`
+**目前分支：** `claude/ai-mcp-object-suggest-yrdxzl`
 
 ---
 
