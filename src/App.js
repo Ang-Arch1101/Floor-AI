@@ -1568,14 +1568,28 @@ if (mode !== 'wall') setSnapIndicator(null);
               const res = await fetch('http://localhost:5000/api/upload-dxf', { method: 'POST', body: fd });
               const data = await res.json();
               if (data.error) { console.error('DXF 匯入錯誤:', data.error); return; }
-              const layers = [...new Set(data.segments.map(s => s.layer))];
-              console.log('=== DXF 診斷 ===');
-              console.log('圖層:', layers);
-              console.log('線段數（合併前）:', data.raw_count);
-              console.log('線段數（合併後）:', data.merged_count);
-              console.log('減少比例:', ((1 - data.merged_count / data.raw_count) * 100).toFixed(1) + '%');
-              console.log('各圖層線段數:', layers.map(l => ({ layer: l, count: data.segments.filter(s => s.layer === l).length })));
-              console.log('完整資料:', data);
+              const walls = data.walls ?? [];
+              const cols = data.columns ?? [];
+              // 直接使用 DXF 原始座標（DXF 的 0,0 對齊世界原點十字）
+              const newWalls = walls.map(w => ({
+                start: { x: w.start[0], y: w.start[1] },
+                end:   { x: w.end[0],   y: w.end[1] },
+                typeId: wallTypes[0]?.id,
+                thickness: w.thickness ?? wallTypes[0]?.thickness ?? THICKNESS,
+              }));
+              const newCols = cols.map(c => ({
+                cx: c.cx,
+                cy: c.cy,
+                type: 'rc',
+                rotated: Math.abs(Math.sin(c.angle)) > 0.5,
+                typeId: colTypes[0]?.id,
+                w: c.w,
+                h: c.h,
+              }));
+              console.log(`DXF 匯入：${newWalls.length} 條牆、${newCols.length} 根柱`);
+              saveHistory();
+              setRawWalls(prev => [...prev, ...newWalls]);
+              if (newCols.length > 0) setColumns(prev => [...prev, ...newCols]);
             } catch (err) {
               console.error('連線失敗（確認後端是否啟動）:', err);
             }

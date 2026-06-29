@@ -5,15 +5,20 @@
 
 ## 目前進度（2026-06）
 
-**剛完成（本次 session）：**
-1. 無限畫布（pan / zoom）— 滾輪縮放、中鍵拖曳平移、世界座標系
-2. 牆端點拖拉伸長 — 選取牆段後兩端出現控制點，可拖拉移動
-3. ESC 改成兩次回到選取模式
-4. 牆 / 柱種類系統 — wallTypes / colTypes 表，可新增 / 編輯 / 刪除
-5. Ctrl+Z / Ctrl+Y 復原（最多 50 步）
-6. 儲存功能 ← **下一個**
+**剛完成（本次 session，DXF 匯入）：**
+1. DXF 解析（backend `dxf_parser.py`）— **平行線配對還原牆 + 碎片分群還原柱**
+   - 牆：DXF 用「雙線」（兩個面，間距≈厚度）表示，`pair_walls` 配對平行線 → 一道牆（中心線 + thickness）
+   - 柱：角柱用 L 折線描邊，`cluster_columns` 依端點鄰近分群 → bounding box；closed 矩形 LWPOLYLINE 直接認柱
+   - 已對 `test.dxf` 驗證：4 道牆（t=15）+ 5 根柱（40×60）
+2. `app.py` 修正 — 回傳 `walls` + `columns`（先前漏回傳 columns）
+3. 前端匯入 — 直接用 DXF 原始座標（DXF 的 0,0 對齊世界原點十字，不重新置中）
+4. pan offsetY 方向修正（拖曳跟手）
 
-**目前分支：** `claude/infinite-canvas-transform-fgKvg`
+**下一個：** 牆接合邏輯改 per-wall thickness（見「已知限制」）；確認牆柱接合裁切
+
+**先前完成：** 無限畫布 pan/zoom、牆端點拖拉、牆/柱種類系統、Ctrl+Z/Y 復原
+
+**目前分支：** `claude/dxf-import-local`
 
 ---
 
@@ -70,9 +75,21 @@
 | 層級 | 技術 | 狀態 |
 |------|------|------|
 | 前端 | React（`src/App.js` 單檔） | 原型完成 |
-| 後端 | Python + Flask | 原型完成 |
+| 後端 | Python + Flask（`backend/`） | DXF 匯入完成 |
+| DXF 解析 | ezdxf | 牆/柱還原完成 |
 | CAD 整合 | pywin32 COM API | 可跑通，穩定性待強化 |
 | AI | Anthropic API (claude-sonnet) | 待整合 |
+
+### 後端架構（`backend/`）
+- `app.py`：Flask，`POST /api/upload-dxf` 接收 DXF，回傳 `{ walls, columns, raw_count, wall_count, col_count }`
+- `dxf_parser.py`：
+  - `parse_dxf(path)`：主流程，LINE/LWPOLYLINE → segments，配對牆 + 分群柱
+  - `pair_walls(segments)`：貪婪配對平行線段 → 牆 `{start:[x,y], end:[x,y], thickness}`，回傳 `(walls, leftover)`
+  - `try_pair(a, b, ...)`：兩線段平行 + 間距∈[8,30] + 重疊≥50 → 一道牆（中心線 + 量到的厚度）
+  - `cluster_columns(segments)`：union-find 依端點鄰近（<50）分群 → bounding box → 柱 `{cx,cy,w,h,angle}`
+  - `detect_rect_from_lwpoly(entity)`：closed 4-頂點矩形 LWPOLYLINE → 柱
+  - 參數常數：`GAP_MIN/MAX`（牆厚範圍）、`OVERLAP_MIN`、`CLUSTER_GAP`、`MAX_COL`
+- 測試檔：`test.dxf`（根目錄）— 4 牆 + 5 柱（含一根遠處孤立參考柱 x≈5070）
 
 ---
 
@@ -115,6 +132,12 @@
 - `window`：放窗（N 鍵），靠近牆自動吸附
 - `select`（ESC）：選取、拖曳、Delete 刪除；選取牆段顯示端點控制點
 
+### DXF 匯入（工具列「匯入 DXF」）
+- `<input type=file>` onChange → POST 到 backend → 取得 `data.walls` / `data.columns`
+- 直接用 DXF 原始座標（不重新置中）：DXF 的 (0,0) 對齊世界原點十字，重複匯入會重疊
+- walls → rawWalls（用後端量到的 thickness）；columns → columns（用後端 bbox 的 w/h）
+- 匯入前 `saveHistory()`，可 Ctrl+Z 還原
+
 ### 無限畫布（viewTransform）
 - 世界座標系：Y 朝上，`screenToWorld` / `worldToScreen` 換算
 - SVG 場景內容包在 `<g transform="matrix(...)">` 裡
@@ -127,7 +150,7 @@
 screenToWorld(sx, sy) → { x: (sx - offsetX) / scale, y: (svgH - sy - offsetY) / scale }
 worldToScreen(wx, wy) → { x: wx*scale + offsetX, y: svgH - (wy*scale + offsetY) }
 ```
-**注意：** pan offsetY 的方向在測試中待確認（上下可能需要反號）
+**注意：** pan offsetY 已修正為反號（`origOffsetY - dy`），拖曳跟手
 
 ### 牆端點拖拉
 - 選取單一牆段 → 兩端出現綠色控制點（r=6，固定像素大小）
@@ -152,8 +175,9 @@ worldToScreen(wx, wy) → { x: wx*scale + offsetX, y: svgH - (wy*scale + offsetY
 
 ### 已知限制（暫緩）
 - 斜牆支援：disabled
-- `computeAllMiters`, `clipStubEnd`, `getWallGaps`, `computeWallDragInfo` 仍用全域 `THICKNESS`（尚未 per-wall）
-- pan offsetY 上下方向待目視確認
+- **牆接合邏輯用固定厚度**：`computeAllMiters`, `clipStubEnd`, `getWallGaps`, `computeWallDragInfo` 仍用全域 `THICKNESS`（尚未 per-wall）← 使用者點名「對齊邏輯是舊的」，下次處理
+- DXF 牆柱接合裁切待確認（匯入後牆與角柱的接合處是否正確）
+- DXF 解析只處理 LINE / LWPOLYLINE；柱配對參數（GAP/CLUSTER）對 test.dxf 調過，其他圖面可能需調
 
 ---
 

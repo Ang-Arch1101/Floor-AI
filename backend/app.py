@@ -29,10 +29,12 @@ def upload_dxf():
         os.unlink(tmp_path)
 
     return jsonify({
-        "status":       "ok",
-        "raw_count":    result["raw_count"],
-        "merged_count": result["merged_count"],
-        "segments":     result["segments"],
+        "status":      "ok",
+        "raw_count":   result["raw_count"],
+        "wall_count":  result["wall_count"],
+        "col_count":   result["col_count"],
+        "walls":       result["walls"],
+        "columns":     result["columns"],
     })
 
 
