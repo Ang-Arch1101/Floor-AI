@@ -760,6 +760,107 @@ function FlipIcon({ obj }) {
 
 function isInSel(selected, item) { return selected.some(s => s.type === item.type && s.idx === item.idx); }
 
+function parseDXF(text) {
+  const lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+  const pairs = [];
+  for (let i = 0; i + 1 < lines.length; i += 2) {
+    const code = parseInt(lines[i].trim(), 10);
+    const val = lines[i + 1].trim();
+    if (!isNaN(code)) pairs.push({ code, val });
+  }
+
+  const segments = [];
+  let inEntities = false;
+  let i = 0;
+
+  while (i < pairs.length) {
+    const { code, val } = pairs[i];
+
+    if (code === 0 && val === 'SECTION') {
+      if (i + 1 < pairs.length && pairs[i + 1].code === 2) {
+        inEntities = pairs[i + 1].val === 'ENTITIES';
+        i += 2;
+        continue;
+      }
+    }
+    if (code === 0 && val === 'ENDSEC') { inEntities = false; i++; continue; }
+    if (!inEntities) { i++; continue; }
+
+    if (code === 0 && val === 'LINE') {
+      let x1 = 0, y1 = 0, x2 = 0, y2 = 0;
+      i++;
+      while (i < pairs.length && pairs[i].code !== 0) {
+        const { code: c, val: v } = pairs[i];
+        if (c === 10) x1 = parseFloat(v);
+        else if (c === 20) y1 = parseFloat(v);
+        else if (c === 11) x2 = parseFloat(v);
+        else if (c === 21) y2 = parseFloat(v);
+        i++;
+      }
+      if (Math.hypot(x2 - x1, y2 - y1) > 1e-6) segments.push({ x1, y1, x2, y2 });
+      continue;
+    }
+
+    if (code === 0 && val === 'LWPOLYLINE') {
+      let flags = 0;
+      const verts = [];
+      let curX = null;
+      i++;
+      while (i < pairs.length && pairs[i].code !== 0) {
+        const { code: c, val: v } = pairs[i];
+        if (c === 70) flags = parseInt(v, 10);
+        else if (c === 10) curX = parseFloat(v);
+        else if (c === 20 && curX !== null) { verts.push({ x: curX, y: parseFloat(v) }); curX = null; }
+        i++;
+      }
+      for (let j = 0; j + 1 < verts.length; j++) {
+        const a = verts[j], b = verts[j + 1];
+        if (Math.hypot(b.x - a.x, b.y - a.y) > 1e-6) segments.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y });
+      }
+      if ((flags & 1) && verts.length > 1) {
+        const a = verts[verts.length - 1], b = verts[0];
+        if (Math.hypot(b.x - a.x, b.y - a.y) > 1e-6) segments.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y });
+      }
+      continue;
+    }
+
+    if (code === 0 && val === 'POLYLINE') {
+      let polyFlags = 0;
+      i++;
+      while (i < pairs.length && pairs[i].code !== 0) {
+        if (pairs[i].code === 70) polyFlags = parseInt(pairs[i].val, 10);
+        i++;
+      }
+      const verts = [];
+      while (i < pairs.length && !(pairs[i].code === 0 && pairs[i].val === 'SEQEND')) {
+        if (pairs[i].code === 0 && pairs[i].val === 'VERTEX') {
+          let vx = 0, vy = 0;
+          i++;
+          while (i < pairs.length && pairs[i].code !== 0) {
+            if (pairs[i].code === 10) vx = parseFloat(pairs[i].val);
+            else if (pairs[i].code === 20) vy = parseFloat(pairs[i].val);
+            i++;
+          }
+          verts.push({ x: vx, y: vy });
+        } else { i++; }
+      }
+      for (let j = 0; j + 1 < verts.length; j++) {
+        const a = verts[j], b = verts[j + 1];
+        if (Math.hypot(b.x - a.x, b.y - a.y) > 1e-6) segments.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y });
+      }
+      if ((polyFlags & 1) && verts.length > 1) {
+        const a = verts[verts.length - 1], b = verts[0];
+        if (Math.hypot(b.x - a.x, b.y - a.y) > 1e-6) segments.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y });
+      }
+      i++;
+      continue;
+    }
+
+    i++;
+  }
+  return segments;
+}
+
 const PLACE_MODES = [
   { key: 'column', label: '柱 [C]' },
   { key: 'wall',   label: '牆 [W]' },
@@ -791,6 +892,7 @@ export default function App() {
   const [snapIndicator, setSnapIndicator] = useState(null);
   const [editingDim, setEditingDim] = useState(null);
   const svgRef = useRef();
+  const dxfInputRef = useRef();
   const [viewTransform, setViewTransform] = useState({ scale: 1, offsetX: 0, offsetY: 0 });
   const [panning, setPanning] = useState(null);
   const [endpointDrag, setEndpointDrag] = useState(null);
@@ -905,6 +1007,41 @@ export default function App() {
     saveHistory();
     setRawWalls([]);
     setColumns([]);
+  }
+
+  function handleDXFImport(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    e.target.value = '';
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const segments = parseDXF(ev.target.result);
+      if (segments.length === 0) {
+        window.alert('未找到可匯入的線段（支援 LINE、LWPOLYLINE、POLYLINE 實體）');
+        return;
+      }
+      const thickness = wallTypes.find(t => t.id === activeWallTypeId)?.thickness ?? THICKNESS;
+      const newWalls = segments.map(s => ({
+        start: { x: s.x1, y: s.y1 },
+        end: { x: s.x2, y: s.y2 },
+        typeId: activeWallTypeId,
+        thickness,
+      }));
+      saveHistory();
+      setRawWalls(prev => [...prev, ...newWalls]);
+
+      const allX = segments.flatMap(s => [s.x1, s.x2]);
+      const allY = segments.flatMap(s => [s.y1, s.y2]);
+      const minX = Math.min(...allX), maxX = Math.max(...allX);
+      const minY = Math.min(...allY), maxY = Math.max(...allY);
+      const svgW = svgRef.current?.clientWidth ?? 800;
+      const svgH = svgRef.current?.clientHeight ?? 600;
+      const contentW = maxX - minX || 1, contentH = maxY - minY || 1;
+      const scale = Math.min(svgW / contentW, svgH / contentH) * 0.85;
+      const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+      setViewTransform({ scale, offsetX: svgW / 2 - cx * scale, offsetY: svgH / 2 - cy * scale });
+    };
+    reader.readAsText(file);
   }
 
   function handleAddWallType() {
@@ -1553,6 +1690,11 @@ if (mode !== 'wall') setSnapIndicator(null);
             刪除 {selected.length > 1 ? `(${selected.length})` : ''} [Del]
           </button>
         )}
+        <input ref={dxfInputRef} type="file" accept=".dxf" style={{ display: 'none' }} onChange={handleDXFImport} />
+        <button onClick={() => dxfInputRef.current?.click()}
+          style={{ padding: '6px 16px', background: '#1a1a1a', color: '#888', border: '1px solid #333', borderRadius: 6, cursor: 'pointer', fontSize: 13 }}>
+          匯入 DXF
+        </button>
         <button onClick={handleClear}
           style={{ padding: '6px 16px', background: '#1a1a1a', color: '#666', border: '1px solid #333', borderRadius: 6, cursor: 'pointer', fontSize: 13 }}>
           清除
