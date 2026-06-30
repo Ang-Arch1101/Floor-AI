@@ -570,6 +570,13 @@ function computeWallDragInfo(wall, wallIdx, rawWalls, columns) {
       return (nearXFace && inYRange) || (nearYFace && inXRange);
     });
     if (!colConnected) continue;
+    const h_wall = (wall.thickness ?? THICKNESS) / 2;
+    const adjustedCorners = [
+      { x: col.cx - hw + h_wall, y: col.cy - hh + h_wall },
+      { x: col.cx + hw - h_wall, y: col.cy - hh + h_wall },
+      { x: col.cx - hw + h_wall, y: col.cy + hh - h_wall },
+      { x: col.cx + hw - h_wall, y: col.cy + hh - h_wall },
+    ];
     const projs = corners.map(proj);
     limitMin = Math.max(limitMin, Math.min(...projs) - wallStartProj);
     limitMax = Math.min(limitMax, Math.max(...projs) - wallStartProj);
