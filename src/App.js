@@ -68,12 +68,12 @@ function projectOnWall(pt, wall) {
 }
 
 function getFixedEnd(wall, rawWalls) {
-  const EPS = THICKNESS / 2 + 2;
   function isTJunction(pt) {
     for (const other of rawWalls) {
       if (other === wall || other.isDoor || other.isWindow) continue;
       const n = getNorm(other.start, other.end);
       if (!n) continue;
+      const EPS = (other.thickness ?? THICKNESS) / 2 + 2;
       const t = ((pt.x - other.start.x) * n.dx + (pt.y - other.start.y) * n.dy) / (n.len * n.len);
       if (t < ENDPOINT_EPS || t > 1 - ENDPOINT_EPS) continue;
       const cx = other.start.x + t * n.dx, cy = other.start.y + t * n.dy;
@@ -251,8 +251,9 @@ function splitByWallIntersections(newWall, rawWalls) {
 
     if (tAisEndpoint && !tBisEndpoint) {
       // T-junction (new wall is stub): cut new wall at outer face, cut existing wall
-      const facePx = centerPx + sideSign * nExist.nx * (THICKNESS / 2);
-      const facePy = centerPy + sideSign * nExist.ny * (THICKNESS / 2);
+      const hExist = (w.thickness ?? THICKNESS) / 2;
+      const facePx = centerPx + sideSign * nExist.nx * hExist;
+      const facePy = centerPy + sideSign * nExist.ny * hExist;
       const correctedTa = (
         (facePx - newWall.start.x) * newDx +
         (facePy - newWall.start.y) * newDy
@@ -298,14 +299,14 @@ function splitByWallIntersections(newWall, rawWalls) {
 function getWallGaps(wall, rawWalls) {
   const n = getNorm(wall.start, wall.end);
   if (!n) return { posGaps: [], negGaps: [] };
-  const h = THICKNESS / 2;
+  const hSelf = (wall.thickness ?? THICKNESS) / 2;
   const posLine = {
-    x0: wall.start.x + n.nx * h, y0: wall.start.y + n.ny * h,
-    x1: wall.end.x   + n.nx * h, y1: wall.end.y   + n.ny * h,
+    x0: wall.start.x + n.nx * hSelf, y0: wall.start.y + n.ny * hSelf,
+    x1: wall.end.x   + n.nx * hSelf, y1: wall.end.y   + n.ny * hSelf,
   };
   const negLine = {
-    x0: wall.start.x - n.nx * h, y0: wall.start.y - n.ny * h,
-    x1: wall.end.x   - n.nx * h, y1: wall.end.y   - n.ny * h,
+    x0: wall.start.x - n.nx * hSelf, y0: wall.start.y - n.ny * hSelf,
+    x1: wall.end.x   - n.nx * hSelf, y1: wall.end.y   - n.ny * hSelf,
   };
 
   const posGaps = [], negGaps = [];
@@ -328,7 +329,7 @@ function getWallGaps(wall, rawWalls) {
         const tAlong = ((pt.x - wall.start.x) * n.dx + (pt.y - wall.start.y) * n.dy) / (n.len * n.len);
         if (tAlong < ENDPOINT_EPS || tAlong > 1 - ENDPOINT_EPS) return false;
         const nd = Math.abs((pt.x - wall.start.x) * n.nx + (pt.y - wall.start.y) * n.ny);
-        return nd >= h - 1 && nd <= h + 2;
+        return nd >= hSelf - 1 && nd <= hSelf + 2;
       });
       if (!isOuterFaceT) continue;
       // Fall through to offset-line gap computation below
@@ -341,13 +342,14 @@ function getWallGaps(wall, rawWalls) {
       // tBisEndpoint: stub endpoint at our centerline — extend its offset lines by h so far face gets a gap too
     }
 
+    const hOther = (other.thickness ?? THICKNESS) / 2;
     const otherPos = {
-      x0: other.start.x + nO.nx * h, y0: other.start.y + nO.ny * h,
-      x1: other.end.x   + nO.nx * h, y1: other.end.y   + nO.ny * h,
+      x0: other.start.x + nO.nx * hOther, y0: other.start.y + nO.ny * hOther,
+      x1: other.end.x   + nO.nx * hOther, y1: other.end.y   + nO.ny * hOther,
     };
     const otherNeg = {
-      x0: other.start.x - nO.nx * h, y0: other.start.y - nO.ny * h,
-      x1: other.end.x   - nO.nx * h, y1: other.end.y   - nO.ny * h,
+      x0: other.start.x - nO.nx * hOther, y0: other.start.y - nO.ny * hOther,
+      x1: other.end.x   - nO.nx * hOther, y1: other.end.y   - nO.ny * hOther,
     };
 
     for (const [myLine, gapArr] of [[posLine, posGaps], [negLine, negGaps]]) {
@@ -357,7 +359,7 @@ function getWallGaps(wall, rawWalls) {
         if (hit !== null) tHits.push(hit.tA);
       }
       if (tHits.length === 2) {
-        const epsT = THICKNESS*2 / n.len;
+        const epsT = hSelf*4 / n.len;
         const bothNearStart = tHits[0] < epsT && tHits[1] < epsT;
         const bothNearEnd   = tHits[0] > 1 - epsT && tHits[1] > 1 - epsT;
         if (bothNearStart || bothNearEnd) continue;
@@ -385,7 +387,7 @@ function getColGaps(col, rawWalls) {
     if (w.isDoor || w.isWindow) continue;
     const n = getNorm(w.start, w.end);
     if (!n) continue;
-    const hh2 = THICKNESS / 2;
+    const hh2 = (w.thickness ?? THICKNESS) / 2;
     const offsets = [
       { x0: w.start.x + n.nx*hh2, y0: w.start.y + n.ny*hh2, x1: w.end.x + n.nx*hh2, y1: w.end.y + n.ny*hh2 },
       { x0: w.start.x - n.nx*hh2, y0: w.start.y - n.ny*hh2, x1: w.end.x - n.nx*hh2, y1: w.end.y - n.ny*hh2 },
@@ -430,12 +432,11 @@ function clipOffsetLineOutsideCol(x0, y0, x1, y1, col) {
   return [nx0, ny0, nx1, ny1];
 }
 
-function computeMiter(wallA, wallB) {
+function computeMiter(wallA, wallB, hA = THICKNESS / 2, hB = THICKNESS / 2) {
   const nA = getNorm(wallA.start, wallA.end);
   const nB = getNorm(wallB.start, wallB.end);
   if (!nA || !nB) return null;
   const P = wallA.end;
-  const h = THICKNESS / 2;
   const uAx = nA.dx / nA.len, uAy = nA.dy / nA.len;
   const uBx = nB.dx / nB.len, uBy = nB.dy / nB.len;
   function lineIntersect(px, py, dx, dy, qx, qy, ex, ey) {
@@ -444,8 +445,8 @@ function computeMiter(wallA, wallB) {
     const t = ((qx - px) * ey - (qy - py) * ex) / denom;
     return { x: px + t * dx, y: py + t * dy };
   }
-  const pos = lineIntersect(P.x + nA.nx * h, P.y + nA.ny * h, uAx, uAy, P.x + nB.nx * h, P.y + nB.ny * h, uBx, uBy);
-  const neg = lineIntersect(P.x - nA.nx * h, P.y - nA.ny * h, uAx, uAy, P.x - nB.nx * h, P.y - nB.ny * h, uBx, uBy);
+  const pos = lineIntersect(P.x + nA.nx * hA, P.y + nA.ny * hA, uAx, uAy, P.x + nB.nx * hB, P.y + nB.ny * hB, uBx, uBy);
+  const neg = lineIntersect(P.x - nA.nx * hA, P.y - nA.ny * hA, uAx, uAy, P.x - nB.nx * hB, P.y - nB.ny * hB, uBx, uBy);
   if (!pos || !neg) return null;
   return { pos, neg };
 }
@@ -487,7 +488,9 @@ function computeAllMiters(rawWalls) {
           return normalDist < 2;
         });
         if (isStubEnd) continue;
-        let m = computeMiter(argA, argB);
+        const hA = (wA.thickness ?? THICKNESS) / 2;
+        const hB = (wB.thickness ?? THICKNESS) / 2;
+        let m = computeMiter(argA, argB, hA, hB);
         if (!m) continue;
         const mA = flipA ? { pos: m.neg, neg: m.pos } : m;
         const mB = flipB ? { pos: m.neg, neg: m.pos } : m;
@@ -510,7 +513,6 @@ function computeWallDragInfo(wall, wallIdx, rawWalls, columns) {
   const normal = isVertical ? { x: 1, y: 0 } : { x: 0, y: 1 };
   const proj = (p) => p.x * normal.x + p.y * normal.y;
   const wallStartProj = proj(wall.start);
-  const half = THICKNESS / 2;
 
   // Constraint from one through-wall: centerline can reach the endpoint (no THICKNESS/2 inset)
   // so the dragged wall can snap to a T-join position at the through-wall's endpoints.
@@ -540,12 +542,13 @@ function computeWallDragInfo(wall, wallIdx, rawWalls, columns) {
     let connected = !!hit;
     if (!connected) {
       // Check if either endpoint is near other's body (trimmed T-junction stub end)
-      // Threshold: half + GRID to account for grid snapping and trim offset
+      // Threshold: other's half-thickness + GRID to account for grid snapping and trim offset
+      const halfOther = (other.thickness ?? THICKNESS) / 2;
       for (const pt of [wall.start, wall.end]) {
         const tAlong = ((pt.x - other.start.x) * nO.dx + (pt.y - other.start.y) * nO.dy) / (nO.len * nO.len);
         if (tAlong < -0.01 || tAlong > 1.01) continue;
         const dist = Math.abs((pt.x - other.start.x) * nO.nx + (pt.y - other.start.y) * nO.ny);
-        if (dist <= half + GRID) { connected = true; break; }
+        if (dist <= halfOther + GRID) { connected = true; break; }
       }
     }
     if (!connected) continue;
@@ -570,13 +573,6 @@ function computeWallDragInfo(wall, wallIdx, rawWalls, columns) {
       return (nearXFace && inYRange) || (nearYFace && inXRange);
     });
     if (!colConnected) continue;
-    const h_wall = (wall.thickness ?? THICKNESS) / 2;
-    const adjustedCorners = [
-      { x: col.cx - hw + h_wall, y: col.cy - hh + h_wall },
-      { x: col.cx + hw - h_wall, y: col.cy - hh + h_wall },
-      { x: col.cx - hw + h_wall, y: col.cy + hh - h_wall },
-      { x: col.cx + hw - h_wall, y: col.cy + hh - h_wall },
-    ];
     const projs = corners.map(proj);
     limitMin = Math.max(limitMin, Math.min(...projs) - wallStartProj);
     limitMax = Math.min(limitMax, Math.max(...projs) - wallStartProj);
@@ -607,7 +603,7 @@ function EdgeWithGaps({ x0, y0, x1, y1, gaps, color }) {
 }
 
 function clipStubEnd(px, py, rawWalls, currentWall) {
-  const h = THICKNESS / 2;
+  const hSelf = (currentWall.thickness ?? THICKNESS) / 2;
   const nS = getNorm(currentWall.start, currentWall.end);
   if (!nS) return null;
   // Determine if this is the end or start of the stub (affects which face to clip to)
@@ -624,16 +620,17 @@ function clipStubEnd(px, py, rawWalls, currentWall) {
     if (normalDist > 2) continue;
 
     // Find which face of the through-wall the stub connects to
+    const hOther = (other.thickness ?? THICKNESS) / 2;
     const preDist = (px + preSign * nS.dx / nS.len - other.start.x) * nO.nx
                   + (py + preSign * nS.dy / nS.len - other.start.y) * nO.ny;
     const faceSign = preDist >= 0 ? 1 : -1;
-    const facePx = px + faceSign * nO.nx * h;
-    const facePy = py + faceSign * nO.ny * h;
+    const facePx = px + faceSign * nO.nx * hOther;
+    const facePy = py + faceSign * nO.ny * hOther;
 
     // Intersect stub's pos/neg offset lines with the through-wall face line
     function faceIntersect(offsetSign) {
-      const lx = px + offsetSign * nS.nx * h;
-      const ly = py + offsetSign * nS.ny * h;
+      const lx = px + offsetSign * nS.nx * hSelf;
+      const ly = py + offsetSign * nS.ny * hSelf;
       const denom = nS.dx * nO.dy - nS.dy * nO.dx;
       if (Math.abs(denom) < 1e-9) return { x: facePx, y: facePy };
       const tI = ((facePx - lx) * nO.dy - (facePy - ly) * nO.dx) / denom;
@@ -658,7 +655,7 @@ function WallDimAnnotation({ wall, onClickValue }) {
   const dx1 = wall.start.x + nx * DIM_OFFSET, dy1 = wall.start.y + ny * DIM_OFFSET;
   const dx2 = wall.end.x   + nx * DIM_OFFSET, dy2 = wall.end.y   + ny * DIM_OFFSET;
 
-  const extFrom = THICKNESS / 2, extTo = DIM_OFFSET + 4;
+  const extFrom = (wall.thickness ?? THICKNESS) / 2, extTo = DIM_OFFSET + 4;
   const ext1 = { x1: wall.start.x + nx*extFrom, y1: wall.start.y + ny*extFrom, x2: wall.start.x + nx*extTo, y2: wall.start.y + ny*extTo };
   const ext2 = { x1: wall.end.x   + nx*extFrom, y1: wall.end.y   + ny*extFrom, x2: wall.end.x   + nx*extTo, y2: wall.end.y   + ny*extTo };
 
