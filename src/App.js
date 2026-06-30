@@ -88,11 +88,11 @@ function getFixedEnd(wall, rawWalls) {
   return 'center';
 }
 
-function placeOpening(walls, wallIdx, clickPt, type, flipped = false) {
+function placeOpening(walls, wallIdx, clickPt, type, flipped = false, openingType = null) {
   const wall = walls[wallIdx];
   const n = getNorm(wall.start, wall.end);
   if (!n) return walls;
-  const WIDTH = type === 'door' ? DOOR_WIDTH : WINDOW_WIDTH;
+  const WIDTH = openingType?.width ?? (type === 'door' ? DOOR_WIDTH : WINDOW_WIDTH);
   const halfT = (WIDTH / 2) / n.len;
   let t = projectOnWall(clickPt, wall);
   t = Math.max(halfT, Math.min(1 - halfT, t));
@@ -100,13 +100,21 @@ function placeOpening(walls, wallIdx, clickPt, type, flipped = false) {
   if (tA < 0 || tB > 1) return walls;
   const ptA = { x: wall.start.x + tA * n.dx, y: wall.start.y + tA * n.dy };
   const ptB = { x: wall.start.x + tB * n.dx, y: wall.start.y + tB * n.dy };
+  // The opening carries its OWN door/window type id + width, plus the host
+  // wall's thickness so its jambs render flush with the wall faces.
   const obj = {
     [type === 'door' ? 'isDoor' : 'isWindow']: true,
     ptA, ptB, nx: n.nx, ny: n.ny,
     ux: n.dx / n.len, uy: n.dy / n.len, flipped,
+    width: WIDTH, typeId: openingType?.id, thickness: wall.thickness,
   };
+  // Flanking segments keep the host wall's own type/thickness.
+  const carrier = { typeId: wall.typeId, thickness: wall.thickness };
   const next = [...walls];
-  next.splice(wallIdx, 1, { start: wall.start, end: ptA }, obj, { start: ptB, end: wall.end });
+  next.splice(wallIdx, 1,
+    { start: wall.start, end: ptA, ...carrier },
+    obj,
+    { start: ptB, end: wall.end, ...carrier });
   return next;
 }
 
@@ -117,7 +125,8 @@ function findOpeningGroup(walls, idx) {
 }
 
 function mergeOpening(walls, group) {
-  const merged = { start: walls[group.leftIdx].start, end: walls[group.rightIdx].end };
+  const left = walls[group.leftIdx];
+  const merged = { start: left.start, end: walls[group.rightIdx].end, typeId: left.typeId, thickness: left.thickness };
   const next = [...walls];
   next.splice(group.leftIdx, 3, merged);
   return next;
@@ -725,16 +734,17 @@ function WallSegment({ wall, isSelected, columns = [], miter = {}, rawWalls = []
 function DoorSegment({ door, isPreview = false, isSelected = false }) {
   const { ptA, ptB, flipped } = door;
   const nx = flipped ? -door.nx : door.nx, ny = flipped ? -door.ny : door.ny;
-  const h = THICKNESS / 2, color = isSelected ? '#ff6b9d' : '#00d4aa';
+  const h = (door.thickness ?? THICKNESS) / 2, color = isSelected ? '#ff6b9d' : '#00d4aa';
   const dx = ptB.x - ptA.x, dy = ptB.y - ptA.y;
+  const span = Math.hypot(dx, dy); // actual door leaf length = swing arc radius
   const doorEndX = ptA.x + (flipped ? -dy : dy), doorEndY = ptA.y + (flipped ? dx : -dx);
-  const arcPath = `M ${doorEndX} ${doorEndY} A ${DOOR_WIDTH} ${DOOR_WIDTH} 0 0 ${flipped ? 0 : 1} ${ptB.x} ${ptB.y}`;
+  const arcPath = `M ${doorEndX} ${doorEndY} A ${span} ${span} 0 0 ${flipped ? 0 : 1} ${ptB.x} ${ptB.y}`;
   return <g opacity={isPreview ? 0.5 : 1}><line x1={ptA.x+nx*h} y1={ptA.y+ny*h} x2={ptA.x-nx*h} y2={ptA.y-ny*h} stroke={color} strokeWidth="1.5" /><line x1={ptB.x+nx*h} y1={ptB.y+ny*h} x2={ptB.x-nx*h} y2={ptB.y-ny*h} stroke={color} strokeWidth="1.5" /><line x1={ptA.x} y1={ptA.y} x2={doorEndX} y2={doorEndY} stroke={color} strokeWidth="1.5" /><path d={arcPath} stroke={color} strokeWidth="1" fill="none" strokeDasharray="4 3" /></g>;
 }
 
 function WindowSegment({ win, isPreview = false, isSelected = false }) {
   const { ptA, ptB, nx, ny, ux, uy } = win;
-  const h = THICKNESS / 2, color = isSelected ? '#ff6b9d' : '#00d4aa';
+  const h = (win.thickness ?? THICKNESS) / 2, color = isSelected ? '#ff6b9d' : '#00d4aa';
   const fA = { x: ptA.x + ux * WINDOW_INSET, y: ptA.y + uy * WINDOW_INSET };
   const fB = { x: ptB.x - ux * WINDOW_INSET, y: ptB.y - uy * WINDOW_INSET };
   return <g opacity={isPreview ? 0.5 : 1}><line x1={ptA.x+nx*h} y1={ptA.y+ny*h} x2={ptA.x-nx*h} y2={ptA.y-ny*h} stroke={color} strokeWidth="1.5" /><line x1={ptB.x+nx*h} y1={ptB.y+ny*h} x2={ptB.x-nx*h} y2={ptB.y-ny*h} stroke={color} strokeWidth="1.5" /><line x1={ptA.x+nx*h} y1={ptA.y+ny*h} x2={ptB.x+nx*h} y2={ptB.y+ny*h} stroke={color} strokeWidth="1.5" /><line x1={ptA.x-nx*h} y1={ptA.y-ny*h} x2={ptB.x-nx*h} y2={ptB.y-ny*h} stroke={color} strokeWidth="1.5" /><line x1={fA.x+nx*h} y1={fA.y+ny*h} x2={fA.x-nx*h} y2={fA.y-ny*h} stroke={color} strokeWidth="1.5" /><line x1={fB.x+nx*h} y1={fB.y+ny*h} x2={fB.x-nx*h} y2={fB.y-ny*h} stroke={color} strokeWidth="1.5" /><line x1={fB.x+nx*GLASS_OFFSET} y1={fB.y+ny*GLASS_OFFSET} x2={fA.x+nx*GLASS_OFFSET} y2={fA.y+ny*GLASS_OFFSET} stroke={color} strokeWidth="1" /><line x1={fA.x-nx*GLASS_OFFSET} y1={fA.y-ny*GLASS_OFFSET} x2={fB.x-nx*GLASS_OFFSET} y2={fB.y-ny*GLASS_OFFSET} stroke={color} strokeWidth="1" /></g>;
@@ -806,14 +816,30 @@ export default function App() {
     try { return JSON.parse(localStorage.getItem('floorAI_colTypes') ?? 'null') ?? [{ id: 'ct1', name: 'RC 柱', w: 80, h: 100 }]; } catch { return [{ id: 'ct1', name: 'RC 柱', w: 80, h: 100 }]; }
   });
   const [activeColTypeId, setActiveColTypeId] = useState('ct1');
+  const [doorTypes, setDoorTypes] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('floorAI_doorTypes') ?? 'null') ?? [{ id: 'dt1', name: '單開門', width: 80 }]; } catch { return [{ id: 'dt1', name: '單開門', width: 80 }]; }
+  });
+  const [activeDoorTypeId, setActiveDoorTypeId] = useState('dt1');
+  const [windowTypes, setWindowTypes] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('floorAI_windowTypes') ?? 'null') ?? [{ id: 'nt1', name: '一般窗', width: 80 }]; } catch { return [{ id: 'nt1', name: '一般窗', width: 80 }]; }
+  });
+  const [activeWindowTypeId, setActiveWindowTypeId] = useState('nt1');
   const [wallTypePanel, setWallTypePanel] = useState(false);
   const [wallTypeForm, setWallTypeForm] = useState({ name: '', thickness: '' });
   const [colTypePanel, setColTypePanel] = useState(false);
   const [colTypeForm, setColTypeForm] = useState({ name: '', w: '', h: '' });
+  const [doorTypePanel, setDoorTypePanel] = useState(false);
+  const [doorTypeForm, setDoorTypeForm] = useState({ name: '', width: '' });
+  const [windowTypePanel, setWindowTypePanel] = useState(false);
+  const [windowTypeForm, setWindowTypeForm] = useState({ name: '', width: '' });
   const [editingWallTypeId, setEditingWallTypeId] = useState(null);
   const [editingWallTypeForm, setEditingWallTypeForm] = useState({});
   const [editingColTypeId, setEditingColTypeId] = useState(null);
   const [editingColTypeForm, setEditingColTypeForm] = useState({});
+  const [editingDoorTypeId, setEditingDoorTypeId] = useState(null);
+  const [editingDoorTypeForm, setEditingDoorTypeForm] = useState({});
+  const [editingWindowTypeId, setEditingWindowTypeId] = useState(null);
+  const [editingWindowTypeForm, setEditingWindowTypeForm] = useState({});
   const [history, setHistory] = useState([]);
   const [future, setFuture] = useState([]);
 
@@ -859,7 +885,9 @@ export default function App() {
     localStorage.setItem('floorAI_columns', JSON.stringify(columns));
     localStorage.setItem('floorAI_wallTypes', JSON.stringify(wallTypes));
     localStorage.setItem('floorAI_colTypes', JSON.stringify(colTypes));
-  }, [rawWalls, columns, wallTypes, colTypes]);
+    localStorage.setItem('floorAI_doorTypes', JSON.stringify(doorTypes));
+    localStorage.setItem('floorAI_windowTypes', JSON.stringify(windowTypes));
+  }, [rawWalls, columns, wallTypes, colTypes, doorTypes, windowTypes]);
 
   function saveHistory() {
     setHistory(prev => [...prev.slice(-49), { rawWalls, columns }]);
@@ -965,6 +993,60 @@ export default function App() {
     setColumns(prev => prev.map(c => c.typeId === id ? { ...c, typeId: fallback.id, w: fallback.w, h: fallback.h } : c));
     setColTypes(prev => prev.filter(t => t.id !== id));
     if (activeColTypeId === id) setActiveColTypeId(fallback.id);
+  }
+
+  function handleAddDoorType() {
+    const w = parseInt(doorTypeForm.width);
+    if (!doorTypeForm.name || isNaN(w) || w <= 0) return;
+    const id = `dt${Date.now()}`;
+    setDoorTypes(prev => [...prev, { id, name: doorTypeForm.name, width: w }]);
+    setActiveDoorTypeId(id);
+    setDoorTypeForm({ name: '', width: '' });
+    setDoorTypePanel(false);
+  }
+
+  // Edits the type definition (affects future placements); existing openings
+  // keep their baked-in geometry/width — re-flowing them is a deferred stretch.
+  function handleEditDoorType(id, name, width) {
+    setDoorTypes(prev => prev.map(t => t.id === id ? { ...t, name, width } : t));
+    setEditingDoorTypeId(null);
+  }
+
+  function handleDeleteDoorType(id) {
+    if (doorTypes.length <= 1) return;
+    const count = rawWalls.filter(w => w.isDoor && w.typeId === id).length;
+    if (count > 0 && !window.confirm(`${count} 個門使用此種類，刪除後將改為預設種類。繼續？`)) return;
+    saveHistory();
+    const fallback = doorTypes.find(t => t.id !== id);
+    setRawWalls(prev => prev.map(w => (w.isDoor && w.typeId === id) ? { ...w, typeId: fallback.id } : w));
+    setDoorTypes(prev => prev.filter(t => t.id !== id));
+    if (activeDoorTypeId === id) setActiveDoorTypeId(fallback.id);
+  }
+
+  function handleAddWindowType() {
+    const w = parseInt(windowTypeForm.width);
+    if (!windowTypeForm.name || isNaN(w) || w <= 0) return;
+    const id = `nt${Date.now()}`;
+    setWindowTypes(prev => [...prev, { id, name: windowTypeForm.name, width: w }]);
+    setActiveWindowTypeId(id);
+    setWindowTypeForm({ name: '', width: '' });
+    setWindowTypePanel(false);
+  }
+
+  function handleEditWindowType(id, name, width) {
+    setWindowTypes(prev => prev.map(t => t.id === id ? { ...t, name, width } : t));
+    setEditingWindowTypeId(null);
+  }
+
+  function handleDeleteWindowType(id) {
+    if (windowTypes.length <= 1) return;
+    const count = rawWalls.filter(w => w.isWindow && w.typeId === id).length;
+    if (count > 0 && !window.confirm(`${count} 個窗使用此種類，刪除後將改為預設種類。繼續？`)) return;
+    saveHistory();
+    const fallback = windowTypes.find(t => t.id !== id);
+    setRawWalls(prev => prev.map(w => (w.isWindow && w.typeId === id) ? { ...w, typeId: fallback.id } : w));
+    setWindowTypes(prev => prev.filter(t => t.id !== id));
+    if (activeWindowTypeId === id) setActiveWindowTypeId(fallback.id);
   }
 
   function deleteSelected(sel) {
@@ -1255,14 +1337,15 @@ if (mode !== 'wall') setSnapIndicator(null);
     if (!wall || wall.isDoor || wall.isWindow) return;
     const n = getNorm(wall.start, wall.end);
     if (!n) return;
-    const WIDTH = type === 'door' ? DOOR_WIDTH : WINDOW_WIDTH;
+    const activeOT = type === 'door' ? doorTypes.find(t => t.id === activeDoorTypeId) : windowTypes.find(t => t.id === activeWindowTypeId);
+    const WIDTH = activeOT?.width ?? (type === 'door' ? DOOR_WIDTH : WINDOW_WIDTH);
     const halfT = (WIDTH / 2) / n.len;
     let t = projectOnWall(pt, wall);
     t = Math.max(halfT, Math.min(1 - halfT, t));
     const tA = t - halfT, tB = t + halfT;
     const ptA = { x: wall.start.x + tA * n.dx, y: wall.start.y + tA * n.dy };
     const ptB = { x: wall.start.x + tB * n.dx, y: wall.start.y + tB * n.dy };
-    setDragPreview({ [type === 'door' ? 'isDoor' : 'isWindow']: true, ptA, ptB, nx: n.nx, ny: n.ny, ux: n.dx / n.len, uy: n.dy / n.len, flipped });
+    setDragPreview({ [type === 'door' ? 'isDoor' : 'isWindow']: true, ptA, ptB, nx: n.nx, ny: n.ny, ux: n.dx / n.len, uy: n.dy / n.len, flipped, thickness: wall.thickness });
   }
 
   function handleMouseUp(e) {
@@ -1301,7 +1384,8 @@ if (mode !== 'wall') setSnapIndicator(null);
     const pt = getPoint(e);
     const { wallsMerged, mergedWallIdx, type, flipped } = dragging;
     saveHistory();
-    setRawWalls(placeOpening(wallsMerged, mergedWallIdx, pt, type, flipped));
+    const openingType = type === 'door' ? doorTypes.find(t => t.id === activeDoorTypeId) : windowTypes.find(t => t.id === activeWindowTypeId);
+    setRawWalls(placeOpening(wallsMerged, mergedWallIdx, pt, type, flipped, openingType));
     setDragging(null); setDragPreview(null);
   }
 
@@ -1390,7 +1474,8 @@ if (mode !== 'wall') setSnapIndicator(null);
     if (mode === 'door' || mode === 'window') {
       const THRESHOLD = THICKNESS / 2 + 5;
       const idx = rawWalls.findIndex(w => !w.isDoor && !w.isWindow && distToWall(pt, w) < THRESHOLD);
-      if (idx !== -1) setRawWalls(prev => placeOpening(prev, idx, pt, mode));
+      const openingType = mode === 'door' ? doorTypes.find(t => t.id === activeDoorTypeId) : windowTypes.find(t => t.id === activeWindowTypeId);
+      if (idx !== -1) setRawWalls(prev => placeOpening(prev, idx, pt, mode, false, openingType));
       return;
     }
   }
@@ -1406,14 +1491,15 @@ if (mode !== 'wall') setSnapIndicator(null);
     const wall = rawWalls[idx];
     const n = getNorm(wall.start, wall.end);
     if (!n) return null;
-    const WIDTH = mode === 'door' ? DOOR_WIDTH : WINDOW_WIDTH;
+    const activeOT = mode === 'door' ? doorTypes.find(t => t.id === activeDoorTypeId) : windowTypes.find(t => t.id === activeWindowTypeId);
+    const WIDTH = activeOT?.width ?? (mode === 'door' ? DOOR_WIDTH : WINDOW_WIDTH);
     const halfT = (WIDTH / 2) / n.len;
     let t = projectOnWall(cursor, wall);
     t = Math.max(halfT, Math.min(1 - halfT, t));
     const tA = t - halfT, tB = t + halfT;
     const ptA = { x: wall.start.x + tA * n.dx, y: wall.start.y + tA * n.dy };
     const ptB = { x: wall.start.x + tB * n.dx, y: wall.start.y + tB * n.dy };
-    return { isDoor: mode === 'door', isWindow: mode === 'window', ptA, ptB, nx: n.nx, ny: n.ny, ux: n.dx/n.len, uy: n.dy/n.len, flipped: false };
+    return { isDoor: mode === 'door', isWindow: mode === 'window', ptA, ptB, nx: n.nx, ny: n.ny, ux: n.dx/n.len, uy: n.dy/n.len, flipped: false, thickness: wall.thickness };
   })() : null;
 
   function getHint() {
@@ -1520,6 +1606,57 @@ if (mode !== 'wall') setSnapIndicator(null);
                   <input placeholder="寬" type="number" value={colTypeForm.w} onChange={e => setColTypeForm(f => ({...f, w: e.target.value}))} style={{ ...is, width: 44 }} />
                   <input placeholder="深" type="number" value={colTypeForm.h} onChange={e => setColTypeForm(f => ({...f, h: e.target.value}))} style={{ ...is, width: 44 }} />
                   <button onClick={handleAddColType} style={ss}>確認</button>
+                </span>
+              )}
+            </>
+          );
+        })()}
+        {(mode === 'door' || mode === 'window') && (() => {
+          const ss = { padding: '4px 8px', background: '#1a1a1a', color: '#00d4aa', border: '1px solid #00d4aa66', borderRadius: 6, fontSize: 13, outline: 'none', cursor: 'pointer' };
+          const is = { padding: '4px 6px', background: '#111', color: '#ccc', border: '1px solid #333', borderRadius: 4, fontSize: 12, outline: 'none', width: 80 };
+          const isDoor = mode === 'door';
+          const types = isDoor ? doorTypes : windowTypes;
+          const activeId = isDoor ? activeDoorTypeId : activeWindowTypeId;
+          const setActiveId = isDoor ? setActiveDoorTypeId : setActiveWindowTypeId;
+          const editingId = isDoor ? editingDoorTypeId : editingWindowTypeId;
+          const setEditingId = isDoor ? setEditingDoorTypeId : setEditingWindowTypeId;
+          const editingForm = isDoor ? editingDoorTypeForm : editingWindowTypeForm;
+          const setEditingForm = isDoor ? setEditingDoorTypeForm : setEditingWindowTypeForm;
+          const onEdit = isDoor ? handleEditDoorType : handleEditWindowType;
+          const onDelete = isDoor ? handleDeleteDoorType : handleDeleteWindowType;
+          const onAdd = isDoor ? handleAddDoorType : handleAddWindowType;
+          const panel = isDoor ? doorTypePanel : windowTypePanel;
+          const setPanel = isDoor ? setDoorTypePanel : setWindowTypePanel;
+          const form = isDoor ? doorTypeForm : windowTypeForm;
+          const setForm = isDoor ? setDoorTypeForm : setWindowTypeForm;
+          return (
+            <>
+              <div style={{ background: '#111', border: '1px solid #00d4aa44', borderRadius: 6, minWidth: 140, overflow: 'hidden' }}>
+                {types.map(t => (
+                  <div key={t.id} style={{ display: 'flex', alignItems: 'center', padding: '3px 6px', background: t.id === activeId ? '#00d4aa22' : 'transparent', cursor: 'pointer' }}
+                    onClick={() => { if (editingId !== t.id) setActiveId(t.id); }}>
+                    {editingId === t.id ? (
+                      <>
+                        <input value={editingForm.name ?? ''} onChange={e => setEditingForm(f => ({...f, name: e.target.value}))} style={{ ...is, width: 60 }} onClick={e => e.stopPropagation()} />
+                        <input value={editingForm.width ?? ''} type="number" onChange={e => setEditingForm(f => ({...f, width: e.target.value}))} style={{ ...is, width: 44, marginLeft: 4 }} onClick={e => e.stopPropagation()} />
+                        <button onClick={e => { e.stopPropagation(); onEdit(t.id, editingForm.name, parseInt(editingForm.width)); }} style={{ ...ss, padding: '2px 6px', marginLeft: 4 }}>✓</button>
+                      </>
+                    ) : (
+                      <>
+                        <span style={{ color: t.id === activeId ? '#00d4aa' : '#aaa', fontSize: 12, flex: 1 }}>{t.name} ({t.width})</span>
+                        <button onClick={e => { e.stopPropagation(); setEditingId(t.id); setEditingForm({ name: t.name, width: String(t.width) }); }} style={{ background: 'none', border: 'none', color: '#666', cursor: 'pointer', fontSize: 11, padding: '0 3px' }}>✎</button>
+                        <button onClick={e => { e.stopPropagation(); onDelete(t.id); }} disabled={types.length <= 1} style={{ background: 'none', border: 'none', color: types.length <= 1 ? '#333' : '#666', cursor: types.length <= 1 ? 'default' : 'pointer', fontSize: 11, padding: '0 3px' }}>✕</button>
+                      </>
+                    )}
+                  </div>
+                ))}
+              </div>
+              <button onClick={() => setPanel(v => !v)} style={ss}>+</button>
+              {panel && (
+                <span style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                  <input placeholder="名稱" value={form.name} onChange={e => setForm(f => ({...f, name: e.target.value}))} style={is} />
+                  <input placeholder="寬度" type="number" value={form.width} onChange={e => setForm(f => ({...f, width: e.target.value}))} style={{ ...is, width: 56 }} />
+                  <button onClick={onAdd} style={ss}>確認</button>
                 </span>
               )}
             </>
