@@ -6,14 +6,30 @@
 ## 目前進度（2026-06）
 
 **剛完成（本次 session）：**
-1. 無限畫布（pan / zoom）— 滾輪縮放、中鍵拖曳平移、世界座標系
-2. 牆端點拖拉伸長 — 選取牆段後兩端出現控制點，可拖拉移動
-3. ESC 改成兩次回到選取模式
-4. 牆 / 柱種類系統 — wallTypes / colTypes 表，可新增 / 編輯 / 刪除
-5. Ctrl+Z / Ctrl+Y 復原（最多 50 步）
-6. 儲存功能 ← **下一個**
+1. **接合幾何全面 per-wall thickness** — 牆-牆、牆-柱、門窗開口的接合不再寫死 `THICKNESS/2`，
+   各物件用自己的 `thickness`。涉及 `getWallGaps`（拆 hSelf/hOther）、`computeMiter`（加 hA/hB 參數）、
+   `clipStubEnd`、`splitByWallIntersections`、`getColGaps`、`getFixedEnd`、`computeWallDragInfo`。
+   不同厚度的牆接 L / T / 十字才對齊；等厚時退化回原結果。
+2. **門窗與牆完整化**（roadmap Phase 1 門窗與牆關係）：
+   - 開口 + 切出來的左右牆段都繼承宿主牆 `thickness`/`typeId`（先前 `placeOpening` 會把牆段重設回 15）
+   - `DoorSegment`/`WindowSegment` 門框線用宿主牆厚；門弧半徑用實際門扇跨距
+   - `mergeOpening` 刪開口時還原牆段 thickness/typeId
+   - **門窗寬度種類系統**：`doorTypes`/`windowTypes`（`{id,name,width}`），鏡像 wallTypes/colTypes，
+     工具列可新增/選/編/刪，存 localStorage。開口記自己的門/窗種類 id（與牆 typeId 不同命名空間）
+3. **分支整理** — 修掉 PR #4 對齊 regression、rebase 到新 master（`88d27a0`），分支現為 `claude/dxf-import`
+4. **幾何測試法** — `scratchpad/extract_and_test.js` 用 Babel 抽出 App.js 純函式跑斷言（27/27 pass）。
+   ⚠️ 尚未收進 repo、沒有 `npm test`
 
-**目前分支：** `claude/infinite-canvas-transform-fgKvg`
+**下一個（候選，待使用者選）：**
+- 把幾何測試正式化進 repo（加 `npm test`）
+- 改既有門窗種類寬度 → 套用到已放置開口（stretch；需 `findOpeningGroup` 重算 ptA/ptB）
+- 匯出 pipeline（DXF 匯出 / AutoCAD COM 寫回）— 產品核心交付
+- DXF 匯入收尾（牆柱接合裁切驗證、解析穩健性，需真實圖樣本）
+
+**先前完成：** DXF 匯入（後端 ezdxf 牆/柱還原）、無限畫布 pan/zoom、牆端點拖拉、
+牆/柱種類系統、Ctrl+Z/Y 復原
+
+**目前分支：** `claude/dxf-import`（PR #4）
 
 ---
 
@@ -59,7 +75,7 @@
 ### 幾何關係優先順序
 | 順序 | 關係 | 狀態 |
 |------|------|------|
-| Phase 1 | 門窗與牆 | ⏳ 規劃中 |
+| Phase 1 | 門窗與牆 | ✅ 完成（開口繼承牆厚 + 門窗寬度種類） |
 | Phase 2 | 牆與柱 | ✅ 完成 |
 | Phase 3 | 牆與牆（L / T / 十字） | ✅ 完成 |
 
@@ -70,9 +86,21 @@
 | 層級 | 技術 | 狀態 |
 |------|------|------|
 | 前端 | React（`src/App.js` 單檔） | 原型完成 |
-| 後端 | Python + Flask | 原型完成 |
+| 後端 | Python + Flask（`backend/`） | DXF 匯入完成 |
+| DXF 解析 | ezdxf | 牆/柱還原完成 |
 | CAD 整合 | pywin32 COM API | 可跑通，穩定性待強化 |
 | AI | Anthropic API (claude-sonnet) | 待整合 |
+
+### 後端架構（`backend/`）
+- `app.py`：Flask，`POST /api/upload-dxf` 接收 DXF，回傳 `{ walls, columns, raw_count, wall_count, col_count }`
+- `dxf_parser.py`：
+  - `parse_dxf(path)`：主流程，LINE/LWPOLYLINE → segments，配對牆 + 分群柱
+  - `pair_walls(segments)`：貪婪配對平行線段 → 牆 `{start:[x,y], end:[x,y], thickness}`，回傳 `(walls, leftover)`
+  - `try_pair(a, b, ...)`：兩線段平行 + 間距∈[8,30] + 重疊≥50 → 一道牆（中心線 + 量到的厚度）
+  - `cluster_columns(segments)`：union-find 依端點鄰近（<50）分群 → bounding box → 柱 `{cx,cy,w,h,angle}`
+  - `detect_rect_from_lwpoly(entity)`：closed 4-頂點矩形 LWPOLYLINE → 柱
+  - 參數常數：`GAP_MIN/MAX`（牆厚範圍）、`OVERLAP_MIN`、`CLUSTER_GAP`、`MAX_COL`
+- 測試檔：`test.dxf`（根目錄）— 4 牆 + 5 柱（含一根遠處孤立參考柱 x≈5070）
 
 ---
 
@@ -81,11 +109,16 @@
 ### 資料結構
 - `rawWalls`：所有物件的唯一資料來源（牆段 / 門 / 窗）
   - 牆段：`{ start: {x,y}, end: {x,y}, typeId, thickness }`
-  - 門：`{ isDoor: true, ptA, ptB, nx, ny, ux, uy, flipped }`
-  - 窗：`{ isWindow: true, ptA, ptB, nx, ny, ux, uy }`
+  - 門：`{ isDoor: true, ptA, ptB, nx, ny, ux, uy, flipped, width, typeId, thickness }`
+    - `typeId`→`doorTypes`（門寬）；`thickness`=宿主牆厚（只給 jamb 渲染用）；`width`=開口跨距
+  - 窗：`{ isWindow: true, ptA, ptB, nx, ny, ux, uy, width, typeId, thickness }`（`typeId`→`windowTypes`）
+  - 開口兩側切出的牆段繼承宿主牆 `typeId`/`thickness`
 - `columns`：`{ cx, cy, type: 'rc'|'h', rotated, typeId, w, h }`
 - `wallTypes`：`[{ id, name, thickness }]`（預設一筆 wt1）
 - `colTypes`：`[{ id, name, w, h }]`（預設一筆 ct1）
+- `doorTypes`：`[{ id, name, width }]`（預設 dt1 單開門 80）
+- `windowTypes`：`[{ id, name, width }]`（預設 nt1 一般窗 80）
+  - ⚠️ 開口的 `typeId` 指向 door/window 種類，**與牆段的 `typeId`（指向 wallTypes）是不同命名空間**
 - `selected`：`[{ type: 'rawWall'|'col', idx }]`
 - `viewTransform`：`{ scale, offsetX, offsetY }`（無限畫布）
 - `history` / `future`：undo/redo 快照堆疊
@@ -115,6 +148,12 @@
 - `window`：放窗（N 鍵），靠近牆自動吸附
 - `select`（ESC）：選取、拖曳、Delete 刪除；選取牆段顯示端點控制點
 
+### DXF 匯入（工具列「匯入 DXF」）
+- `<input type=file>` onChange → POST 到 backend → 取得 `data.walls` / `data.columns`
+- 直接用 DXF 原始座標（不重新置中）：DXF 的 (0,0) 對齊世界原點十字，重複匯入會重疊
+- walls → rawWalls（用後端量到的 thickness）；columns → columns（用後端 bbox 的 w/h）
+- 匯入前 `saveHistory()`，可 Ctrl+Z 還原
+
 ### 無限畫布（viewTransform）
 - 世界座標系：Y 朝上，`screenToWorld` / `worldToScreen` 換算
 - SVG 場景內容包在 `<g transform="matrix(...)">` 裡
@@ -127,7 +166,7 @@
 screenToWorld(sx, sy) → { x: (sx - offsetX) / scale, y: (svgH - sy - offsetY) / scale }
 worldToScreen(wx, wy) → { x: wx*scale + offsetX, y: svgH - (wy*scale + offsetY) }
 ```
-**注意：** pan offsetY 的方向在測試中待確認（上下可能需要反號）
+**注意：** pan offsetY 已修正為反號（`origOffsetY - dy`），拖曳跟手
 
 ### 牆端點拖拉
 - 選取單一牆段 → 兩端出現綠色控制點（r=6，固定像素大小）
@@ -151,9 +190,14 @@ worldToScreen(wx, wy) → { x: wx*scale + offsetX, y: svgH - (wy*scale + offsetY
 - 最多保留 50 步
 
 ### 已知限制（暫緩）
-- 斜牆支援：disabled
-- `computeAllMiters`, `clipStubEnd`, `getWallGaps`, `computeWallDragInfo` 仍用全域 `THICKNESS`（尚未 per-wall）
-- pan offsetY 上下方向待目視確認
+- 斜牆支援：disabled（畫牆強制正交 `applyOrthoLock`；接合幾何是向量算的、理論上支援斜角但未測）
+- **per-wall thickness 已完成**（牆-牆/牆-柱/門窗）。唯二仍用全域 `THICKNESS` 的是「門窗開口的
+  放置 click 容差」與「拖放 dead-zone」——屬互動容差、非接合幾何，影響小，暫留
+- 改既有門窗種類寬度 → 尚未套用到「已放置」的開口（需 `findOpeningGroup` 重算 ptA/ptB）。
+  目前只支援「新放置用選定寬度」
+- 幾何測試（`scratchpad/extract_and_test.js`）尚未收進 repo、無 `npm test`
+- DXF 牆柱接合裁切待確認（匯入後牆與角柱的接合處是否正確）
+- DXF 解析只處理 LINE / LWPOLYLINE；柱配對參數（GAP/CLUSTER）對 test.dxf 調過，其他圖面可能需調
 
 ---
 
