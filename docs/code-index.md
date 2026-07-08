@@ -1,5 +1,5 @@
 # FloorAI 程式碼索引
-> 更新：2026-07-08｜對應 commit: cc92f02（master，merge PR #4 之後）
+> 更新：2026-07-08｜對應：merge PR #4（cc92f02）後 + UI 重構（Ribbon/性質面板/狀態列）
 
 > ⚠️ **DXF 匯入尚未大量測試** — 只驗證過 `test.dxf`，真實圖面未測，配對參數/接合裁切可能需要調整。
 > 詳見本檔案最後的「已知限制」與 `CLAUDE.md`。
@@ -28,7 +28,7 @@
 
 ---
 
-## 前端（`src/App.js`，1829 行）
+## 前端（`src/App.js`，1893 行）
 
 ## 全域常數（L3–L11）
 
@@ -87,11 +87,13 @@
 | `HColumn` | L760 | 渲染 H 鋼柱（外框＋翼板＋腹板） |
 | `FlipIcon` | L766 | 門/窗翻轉圖示（雙箭頭） |
 | `isInSel(selected, item)` | L775 | 判斷 item 是否在選取陣列中 |
-| `PLACE_MODES` | L777 | 工具列模式清單（柱/牆/門/窗） |
+| `RibbonGroup` | L778 | Ribbon 分群容器（一組按鈕 + 下方群組名稱） |
+| `PropRow` | L788 | 性質面板的一列「參數名：值」 |
+| `PLACE_MODES` | L797 | 工具列模式清單（柱/牆/門/窗） |
 
 ---
 
-## App 元件 — useState（L785–L844）
+## App 元件 — useState（L805–L864）
 
 | state | 說明 |
 |-------|------|
@@ -117,22 +119,22 @@
 
 ---
 
-## App 元件 — useMemo / 衍生值（L846–L849）
+## App 元件 — useMemo / 衍生值（L866–L869）
 
 | 名稱 | 行號 | 說明 |
 |------|------|------|
-| `wallMiters` | L846 | `computeAllMiters(rawWalls)` 的快取 |
-| `singleSel` | L848 | `selected.length===1 ? selected[0] : null` |
-| `selWallObj` | L849 | 目前選取的牆物件（或 null） |
+| `wallMiters` | L866 | `computeAllMiters(rawWalls)` 的快取 |
+| `singleSel` | L868 | `selected.length===1 ? selected[0] : null` |
+| `selWallObj` | L869 | 目前選取的牆物件（或 null） |
 
 ---
 
-## App 元件 — useEffect（L851–L890）
+## App 元件 — useEffect（L871–L910）
 
 | 行號 | 說明 |
 |------|------|
-| L851 | 鍵盤快捷鍵（ESC/C/W/D/N/Space/Delete/Ctrl+Z/Ctrl+Y） |
-| L883 | localStorage 同步（rawWalls/columns/wallTypes/colTypes/**doorTypes/windowTypes**） |
+| L871 | 鍵盤快捷鍵（ESC/C/W/D/N/Space/Delete/Ctrl+Z/Ctrl+Y） |
+| L903 | localStorage 同步（rawWalls/columns/wallTypes/colTypes/**doorTypes/windowTypes**） |
 
 ---
 
@@ -140,87 +142,84 @@
 
 | 函式 | 行號 | 說明 |
 |------|------|------|
-| `saveHistory()` | L892 | 捕捉目前快照到 history |
-| `undo()` | L897 | Ctrl+Z |
-| `redo()` | L905 | Ctrl+Y |
-| `applyNewLength(wallIdx, newLen)` | L913 | 輸入數值後更新牆長（固定 T 型端） |
-| `handleClear()` | L935 | 清除全部（含確認提示） |
-| `handleAddWallType()` | L942 | 新增牆種類 |
-| `handleAddColType()` | L952 | 新增柱種類 |
-| `handleEditWallType(id, name, thickness)` | L962 | 編輯牆種類（同步更新所有引用） |
-| `handleDeleteWallType(id)` | L969 | 刪除牆種類（fallback 改預設） |
-| `handleEditColType(id, name, w, h)` | L980 | 編輯柱種類 |
-| `handleDeleteColType(id)` | L987 | 刪除柱種類 |
-| `handleAddDoorType()` | L998 | 新增門種類 |
-| `handleEditDoorType(id, name, width)` | L1010 | 編輯門種類（不套用到已放置開口，僅影響未來放置） |
-| `handleDeleteDoorType(id)` | L1015 | 刪除門種類（fallback 改預設） |
-| `handleAddWindowType()` | L1026 | 新增窗種類 |
-| `handleEditWindowType(id, name, width)` | L1036 | 編輯窗種類 |
-| `handleDeleteWindowType(id)` | L1041 | 刪除窗種類 |
-| `deleteSelected(sel)` | L1052 | 刪除選取物件 |
-| `screenToWorld(sx, sy)` | L1077 | 畫面座標 → 世界座標（Y 朝上） |
-| `worldToScreen(wx, wy)` | L1085 | 世界座標 → 畫面座標 |
-| `getRawPt(e)` | L1093 | 滑鼠事件 → 未 snap 的世界座標 |
-| `getPoint(e)` | L1100 | 滑鼠事件 → snap 後的世界座標 |
-| `hitTest(pt)` | L1102 | 點擊命中測試 → `{type,idx}` 或 null |
-| `handleMouseDown(e)` | L1111 | 中鍵平移、端點拖拉、牆拖曳 pending、門窗拖曳 |
-| `applyWallSnap(pt)` | L1201 | App 內部函式（縮排是 rebase 遺留的格式問題，仍在 `App()` 作用域內）；兩階段 snap，per-wall thickness |
-| `handleMouseMove(e)` | L1248 | 平移/端點拖拉/牆拖曳 promote＆移動/門窗拖曳預覽 |
-| `handleMouseUp(e)` | L1351 | 結束各種拖曳 |
-| `handleWheel(e)` | L1392 | 滾輪縮放（對準滑鼠位置，Y 軸錨點已修正） |
-| `handleFlip()` | L1407 | 翻轉門/窗 |
-| `handleClick(e)` | L1412 | 選取/放置柱/畫牆第二點/放置門窗 |
-| `getHint()` | L1505 | 底部狀態提示文字 |
+| `saveHistory()` | L912 | 捕捉目前快照到 history |
+| `undo()` | L917 | Ctrl+Z |
+| `redo()` | L925 | Ctrl+Y |
+| `applyNewLength(wallIdx, newLen)` | L933 | 輸入數值後更新牆長（固定 T 型端） |
+| `handleClear()` | L955 | 清除全部（含確認提示） |
+| `handleAddWallType()` | L962 | 新增牆種類 |
+| `handleAddColType()` | L972 | 新增柱種類 |
+| `handleEditWallType(id, name, thickness)` | L982 | 編輯牆種類（同步更新所有引用） |
+| `handleDeleteWallType(id)` | L989 | 刪除牆種類（fallback 改預設） |
+| `handleEditColType(id, name, w, h)` | L1000 | 編輯柱種類 |
+| `handleDeleteColType(id)` | L1007 | 刪除柱種類 |
+| `handleAddDoorType()` | L1018 | 新增門種類 |
+| `handleEditDoorType(id, name, width)` | L1030 | 編輯門種類（不套用到已放置開口，僅影響未來放置） |
+| `handleDeleteDoorType(id)` | L1035 | 刪除門種類（fallback 改預設） |
+| `handleAddWindowType()` | L1046 | 新增窗種類 |
+| `handleEditWindowType(id, name, width)` | L1056 | 編輯窗種類 |
+| `handleDeleteWindowType(id)` | L1061 | 刪除窗種類 |
+| `deleteSelected(sel)` | L1072 | 刪除選取物件；刪門/窗時合併回的牆段保留 typeId/thickness |
+| `screenToWorld(sx, sy)` | L1097 | 畫面座標 → 世界座標（Y 朝上） |
+| `worldToScreen(wx, wy)` | L1105 | 世界座標 → 畫面座標 |
+| `getRawPt(e)` | L1113 | 滑鼠事件 → 未 snap 的世界座標 |
+| `getPoint(e)` | L1120 | 滑鼠事件 → snap 後的世界座標 |
+| `hitTest(pt)` | L1122 | 點擊命中測試 → `{type,idx}` 或 null |
+| `handleMouseDown(e)` | L1131 | 中鍵平移、端點拖拉、牆拖曳 pending、門窗拖曳 |
+| `applyWallSnap(pt)` | L1221 | App 內部函式（縮排是 rebase 遺留的格式問題，仍在 `App()` 作用域內）；兩階段 snap，per-wall thickness |
+| `handleMouseMove(e)` | L1268 | 平移/端點拖拉/牆拖曳 promote＆移動/門窗拖曳預覽 |
+| `handleMouseUp(e)` | L1371 | 結束各種拖曳 |
+| `handleWheel(e)` | L1412 | 滾輪縮放（對準滑鼠位置，Y 軸錨點已修正） |
+| `handleFlip()` | L1427 | 翻轉門/窗 |
+| `handleClick(e)` | L1432 | 選取/放置柱/畫牆第二點/放置門窗 |
+| `getHint()` | L1525 | 狀態列提示文字 |
+| `typePanelCfg` | L1552 | 四種類型表（牆/柱/門/窗）的面板設定：欄位、handler、顯示格式 |
+| `renderTypeList(cfg)` | L1600 | Type Selector：類型清單（選用/✎編輯/✕刪除/+新增），四種類型共用 |
+| `renderProperties()` | L1643 | 性質面板內容：選取優先顯示物件性質，否則依模式顯示 Type Selector |
 
 ---
 
-## App 元件 — Render 層衍生值（L1483–L1503）
+## App 元件 — Render 層衍生值（L1503–L1523）
 
 | 名稱 | 行號 | 說明 |
 |------|------|------|
-| `activeWT` | L1483 | 目前選用的牆種類物件 |
-| `preview` | L1484 | 畫牆第一點後的線段預覽 |
-| `activeCT` | L1485 | 目前選用的柱種類物件 |
-| `colPreview` | L1486 | 柱放置預覽物件 |
-| `openingPreview` | L1488 | 門/窗放置預覽物件（用 `activeDoorTypeId`/`activeWindowTypeId` 決定寬度） |
+| `activeWT` | L1503 | 目前選用的牆種類物件 |
+| `preview` | L1504 | 畫牆第一點後的線段預覽 |
+| `activeCT` | L1505 | 目前選用的柱種類物件 |
+| `colPreview` | L1506 | 柱放置預覽物件 |
+| `openingPreview` | L1508 | 門/窗放置預覽物件（用 `activeDoorTypeId`/`activeWindowTypeId` 決定寬度） |
 
 ---
 
-## JSX 結構摘要（L1524–1828）
+## JSX 結構摘要（L1723–1893）— 仿 Revit 三區佈局
 
 ```
-<div>                           // 根容器
-  <div>                         // 工具列 (top: 16, left: 16)
-    PLACE_MODES 按鈕              // 柱/牆/門/窗模式切換
-    牆模式時（L1534）：            // 牆種類 dropdown + 新增
-    柱模式時（L1572）：            // RC/H 選擇 + 柱種類 dropdown + 新增
-    門/窗模式時（L1614）：         // 門/窗種類 dropdown + 新增（doorTypes/windowTypes，鏡像牆/柱種類 UI）
-    選取牆時：                    // 牆種類 select
-    選取柱時：                    // 柱種類 select
-    selected > 0：               // 刪除按鈕
-    清除按鈕
-    「匯入 DXF」（L1701–1739）：   // <label>+隱藏 <input type=file>，onChange 直接 fetch
-                                  // POST http://localhost:5000/api/upload-dxf，
-                                  // 用回傳的 walls/columns 直接疊加到 rawWalls/columns（DXF 原始座標）
+<div flex column>                        // 根容器（flex，不再是絕對定位疊圖層）
+  <div>                                  // ── Ribbon（頂部工具列）
+    <RibbonGroup 建模>  柱/牆/門/窗（PLACE_MODES）
+    <RibbonGroup 修改>  選取 [ESC]、刪除 [Del]（無選取時 disabled）
+    <RibbonGroup 檔案>  匯入 DXF（<label>+隱藏 input，POST /api/upload-dxf）、清除
   </div>
-  <div>                         // 底部狀態列 (bottom: 16)
-    getHint()
+  <div flex row>                         // ── 主區
+    <div width:264>                      // 性質面板（Properties palette）
+      {renderProperties()}               //   選取物件 → 類型下拉 + PropRow 參數列
+                                         //   放置模式 → renderTypeList(typePanelCfg[kind])
+                                         //   無選取   → 物件統計
+    </div>
+    <div flex:1 relative>                // 畫布容器
+      <svg ref={svgRef}>
+        原點十字（在 <g transform> 之外）
+        <g transform="matrix(s,0,0,-s,offX,svgH-offY)">   // Y-flip 世界座標
+          columns.map → RCColumn / HColumn
+          rawWalls.map → WallSegment / DoorSegment / WindowSegment
+          WallDimAnnotation（選取牆時）／FlipIcon（選取門/窗時）
+          各種預覽（門/窗拖曳、畫牆、柱、開口）／snapIndicator 紅圈
+        </g>
+        端點控制點（在 <g transform> 之外，用 worldToScreen 定位）
+      </svg>
+    </div>
   </div>
-  <svg ref={svgRef}>
-    原點十字（在 <g transform> 之外）
-    <g transform="matrix(s,0,0,-s,offX,svgH-offY)">   // Y-flip 世界座標
-      columns.map → RCColumn / HColumn
-      rawWalls.map → WallSegment / DoorSegment / WindowSegment
-      WallDimAnnotation（選取牆時）
-      FlipIcon（選取門/窗時）
-      拖曳中預覽（門/窗）
-      牆預覽（畫牆進行中）
-      柱預覽
-      門/窗放置預覽
-      snapIndicator 紅圈
-    </g>
-    端點控制點（在 <g transform> 之外，用 worldToScreen 定位）
-  </svg>
+  <div>                                  // ── 狀態列（底部）：getHint()
   editingDim 輸入框（HTML，fixed 定位）
 </div>
 ```

@@ -774,6 +774,26 @@ function FlipIcon({ obj }) {
 
 function isInSel(selected, item) { return selected.some(s => s.type === item.type && s.idx === item.idx); }
 
+// 仿 Revit ribbon：一組工具按鈕 + 下方的群組名稱
+function RibbonGroup({ label, children }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', padding: '0 10px', borderRight: '1px solid #262626' }}>
+      <div style={{ display: 'flex', gap: 6, alignItems: 'center', flex: 1 }}>{children}</div>
+      <div style={{ fontSize: 10, color: '#555', textAlign: 'center', marginTop: 4, userSelect: 'none' }}>{label}</div>
+    </div>
+  );
+}
+
+// 性質面板的一列「參數名：值」
+function PropRow({ k, v }) {
+  return (
+    <div style={{ display: 'flex', padding: '3px 0', borderBottom: '1px solid #1e1e1e', fontSize: 12 }}>
+      <span style={{ color: '#666', width: 64, flexShrink: 0 }}>{k}</span>
+      <span style={{ color: '#bbb', flex: 1 }}>{v}</span>
+    </div>
+  );
+}
+
 const PLACE_MODES = [
   { key: 'column', label: '柱 [C]' },
   { key: 'wall',   label: '牆 [W]' },
@@ -1062,7 +1082,7 @@ export default function App() {
         if (obj.isDoor || obj.isWindow) {
           const left = next[idx - 1], right = next[idx + 1];
           if (left && right && !left.isDoor && !left.isWindow && !right.isDoor && !right.isWindow) {
-            next.splice(idx - 1, 3, { start: left.start, end: right.end });
+            next.splice(idx - 1, 3, { start: left.start, end: right.end, typeId: left.typeId, thickness: left.thickness });
           }
         } else {
           next = next.filter((_, i) => i !== idx);
@@ -1521,226 +1541,265 @@ if (mode !== 'wall') setSnapIndicator(null);
     return '';
   }
 
-  return (
-    <div style={{ width: '100vw', height: '100vh', background: '#0f0f0f', position: 'relative' }}>
-      <div style={{ position: 'absolute', top: 16, left: 16, display: 'flex', gap: 8, zIndex: 10, alignItems: 'center' }}>
-        {PLACE_MODES.map(m => (
-          <button key={m.key}
-            onClick={() => { setMode(m.key); setStartPt(null); setSelected([]); setSuspended(false); }}
-            style={{ padding: '6px 16px', background: mode === m.key ? '#00d4aa22' : '#1a1a1a', color: mode === m.key ? '#00d4aa' : '#888', border: `1px solid ${mode === m.key ? '#00d4aa66' : '#333'}`, borderRadius: 6, cursor: 'pointer', fontSize: 13 }}>
-            {m.label}
-          </button>
-        ))}
-        {mode === 'wall' && (() => {
-          const ss = { padding: '4px 8px', background: '#1a1a1a', color: '#00d4aa', border: '1px solid #00d4aa66', borderRadius: 6, fontSize: 13, outline: 'none', cursor: 'pointer' };
-          const is = { padding: '4px 6px', background: '#111', color: '#ccc', border: '1px solid #333', borderRadius: 4, fontSize: 12, outline: 'none', width: 80 };
-          return (
-            <>
-              <div style={{ position: 'relative' }}>
-                <div style={{ background: '#111', border: '1px solid #00d4aa44', borderRadius: 6, minWidth: 140, overflow: 'hidden' }}>
-                  {wallTypes.map(t => (
-                    <div key={t.id} style={{ display: 'flex', alignItems: 'center', padding: '3px 6px', background: t.id === activeWallTypeId ? '#00d4aa22' : 'transparent', cursor: 'pointer' }}
-                      onClick={() => { if (editingWallTypeId !== t.id) setActiveWallTypeId(t.id); }}>
-                      {editingWallTypeId === t.id ? (
-                        <>
-                          <input value={editingWallTypeForm.name ?? ''} onChange={e => setEditingWallTypeForm(f => ({...f, name: e.target.value}))} style={{ ...is, width: 60 }} onClick={e => e.stopPropagation()} />
-                          <input value={editingWallTypeForm.thickness ?? ''} type="number" onChange={e => setEditingWallTypeForm(f => ({...f, thickness: e.target.value}))} style={{ ...is, width: 40, marginLeft: 4 }} onClick={e => e.stopPropagation()} />
-                          <button onClick={e => { e.stopPropagation(); handleEditWallType(t.id, editingWallTypeForm.name, parseInt(editingWallTypeForm.thickness)); }} style={{ ...ss, padding: '2px 6px', marginLeft: 4 }}>✓</button>
-                        </>
-                      ) : (
-                        <>
-                          <span style={{ color: t.id === activeWallTypeId ? '#00d4aa' : '#aaa', fontSize: 12, flex: 1 }}>{t.name} ({t.thickness}mm)</span>
-                          <button onClick={e => { e.stopPropagation(); setEditingWallTypeId(t.id); setEditingWallTypeForm({ name: t.name, thickness: String(t.thickness) }); }} style={{ background: 'none', border: 'none', color: '#666', cursor: 'pointer', fontSize: 11, padding: '0 3px' }}>✎</button>
-                          <button onClick={e => { e.stopPropagation(); handleDeleteWallType(t.id); }} disabled={wallTypes.length <= 1} style={{ background: 'none', border: 'none', color: wallTypes.length <= 1 ? '#333' : '#666', cursor: wallTypes.length <= 1 ? 'default' : 'pointer', fontSize: 11, padding: '0 3px' }}>✕</button>
-                        </>
-                      )}
-                    </div>
+  // ── 性質面板（仿 Revit Properties palette + Type Selector）────────────────────
+  const panelInputStyle = { padding: '4px 6px', background: '#111', color: '#ccc', border: '1px solid #333', borderRadius: 4, fontSize: 12, outline: 'none' };
+  const panelBtnStyle = { padding: '3px 8px', background: '#1a1a1a', color: '#00d4aa', border: '1px solid #00d4aa66', borderRadius: 6, fontSize: 12, outline: 'none', cursor: 'pointer' };
+  const typeSelectStyle = { width: '100%', padding: '6px 8px', background: '#1a1a1a', color: '#00d4aa', border: '1px solid #00d4aa66', borderRadius: 6, cursor: 'pointer', fontSize: 13, outline: 'none', marginBottom: 8 };
+  const sectionTitleStyle = { fontSize: 12, color: '#00d4aa', marginBottom: 6 };
+  const noteStyle = { color: '#555', fontSize: 11, lineHeight: 1.6, marginTop: 8 };
+
+  // 四種類型表共用同一個面板 UI，差別只在欄位與 handler
+  const typePanelCfg = {
+    wall: {
+      title: '牆類型', types: wallTypes, activeId: activeWallTypeId, setActiveId: setActiveWallTypeId,
+      editingId: editingWallTypeId, setEditingId: setEditingWallTypeId,
+      editingForm: editingWallTypeForm, setEditingForm: setEditingWallTypeForm,
+      panel: wallTypePanel, setPanel: setWallTypePanel, form: wallTypeForm, setForm: setWallTypeForm,
+      onAdd: handleAddWallType,
+      onEditCommit: (id, f) => handleEditWallType(id, f.name, parseInt(f.thickness)),
+      onDelete: handleDeleteWallType,
+      fields: [{ key: 'thickness', label: '厚度' }],
+      fmt: t => `${t.thickness}mm`,
+    },
+    col: {
+      title: '柱類型', types: colTypes, activeId: activeColTypeId, setActiveId: setActiveColTypeId,
+      editingId: editingColTypeId, setEditingId: setEditingColTypeId,
+      editingForm: editingColTypeForm, setEditingForm: setEditingColTypeForm,
+      panel: colTypePanel, setPanel: setColTypePanel, form: colTypeForm, setForm: setColTypeForm,
+      onAdd: handleAddColType,
+      onEditCommit: (id, f) => handleEditColType(id, f.name, parseInt(f.w), parseInt(f.h)),
+      onDelete: handleDeleteColType,
+      fields: [{ key: 'w', label: '寬' }, { key: 'h', label: '深' }],
+      fmt: t => `${t.w}×${t.h}`,
+    },
+    door: {
+      title: '門類型', types: doorTypes, activeId: activeDoorTypeId, setActiveId: setActiveDoorTypeId,
+      editingId: editingDoorTypeId, setEditingId: setEditingDoorTypeId,
+      editingForm: editingDoorTypeForm, setEditingForm: setEditingDoorTypeForm,
+      panel: doorTypePanel, setPanel: setDoorTypePanel, form: doorTypeForm, setForm: setDoorTypeForm,
+      onAdd: handleAddDoorType,
+      onEditCommit: (id, f) => handleEditDoorType(id, f.name, parseInt(f.width)),
+      onDelete: handleDeleteDoorType,
+      fields: [{ key: 'width', label: '寬度' }],
+      fmt: t => `寬 ${t.width}`,
+    },
+    window: {
+      title: '窗類型', types: windowTypes, activeId: activeWindowTypeId, setActiveId: setActiveWindowTypeId,
+      editingId: editingWindowTypeId, setEditingId: setEditingWindowTypeId,
+      editingForm: editingWindowTypeForm, setEditingForm: setEditingWindowTypeForm,
+      panel: windowTypePanel, setPanel: setWindowTypePanel, form: windowTypeForm, setForm: setWindowTypeForm,
+      onAdd: handleAddWindowType,
+      onEditCommit: (id, f) => handleEditWindowType(id, f.name, parseInt(f.width)),
+      onDelete: handleDeleteWindowType,
+      fields: [{ key: 'width', label: '寬度' }],
+      fmt: t => `寬 ${t.width}`,
+    },
+  };
+
+  // Type Selector：類型清單（點選＝設為使用中、✎ 編輯、✕ 刪除、+ 新增）
+  function renderTypeList(cfg) {
+    return (
+      <div style={{ marginBottom: 16 }}>
+        <div style={{ display: 'flex', alignItems: 'center', marginBottom: 6 }}>
+          <span style={{ fontSize: 12, color: '#888', flex: 1 }}>{cfg.title}</span>
+          <button onClick={() => cfg.setPanel(v => !v)} style={panelBtnStyle}>+</button>
+        </div>
+        <div style={{ background: '#111', border: '1px solid #2a2a2a', borderRadius: 6, overflow: 'hidden' }}>
+          {cfg.types.map(t => (
+            <div key={t.id} style={{ display: 'flex', alignItems: 'center', padding: '4px 8px', background: t.id === cfg.activeId ? '#00d4aa22' : 'transparent', cursor: 'pointer' }}
+              onClick={() => { if (cfg.editingId !== t.id) cfg.setActiveId(t.id); }}>
+              {cfg.editingId === t.id ? (
+                <>
+                  <input value={cfg.editingForm.name ?? ''} onChange={e => cfg.setEditingForm(f => ({ ...f, name: e.target.value }))} style={{ ...panelInputStyle, width: 64 }} onClick={e => e.stopPropagation()} />
+                  {cfg.fields.map(fd => (
+                    <input key={fd.key} value={cfg.editingForm[fd.key] ?? ''} type="number" onChange={e => cfg.setEditingForm(f => ({ ...f, [fd.key]: e.target.value }))} style={{ ...panelInputStyle, width: 40, marginLeft: 4 }} onClick={e => e.stopPropagation()} />
                   ))}
-                </div>
-              </div>
-              <button onClick={() => setWallTypePanel(v => !v)} style={ss}>+</button>
-              {wallTypePanel && (
-                <span style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-                  <input placeholder="名稱" value={wallTypeForm.name} onChange={e => setWallTypeForm(f => ({...f, name: e.target.value}))} style={is} />
-                  <input placeholder="厚度" type="number" value={wallTypeForm.thickness} onChange={e => setWallTypeForm(f => ({...f, thickness: e.target.value}))} style={{ ...is, width: 56 }} />
-                  <button onClick={handleAddWallType} style={ss}>確認</button>
-                </span>
+                  <button onClick={e => { e.stopPropagation(); cfg.onEditCommit(t.id, cfg.editingForm); }} style={{ ...panelBtnStyle, marginLeft: 4 }}>✓</button>
+                </>
+              ) : (
+                <>
+                  <span style={{ color: t.id === cfg.activeId ? '#00d4aa' : '#aaa', fontSize: 12, flex: 1 }}>{t.name}（{cfg.fmt(t)}）</span>
+                  <button onClick={e => { e.stopPropagation(); cfg.setEditingId(t.id); cfg.setEditingForm({ name: t.name, ...Object.fromEntries(cfg.fields.map(fd => [fd.key, String(t[fd.key])])) }); }} style={{ background: 'none', border: 'none', color: '#666', cursor: 'pointer', fontSize: 11, padding: '0 3px' }}>✎</button>
+                  <button onClick={e => { e.stopPropagation(); cfg.onDelete(t.id); }} disabled={cfg.types.length <= 1} style={{ background: 'none', border: 'none', color: cfg.types.length <= 1 ? '#333' : '#666', cursor: cfg.types.length <= 1 ? 'default' : 'pointer', fontSize: 11, padding: '0 3px' }}>✕</button>
+                </>
               )}
-            </>
-          );
-        })()}
-        {mode === 'column' && (() => {
-          const ss = { padding: '4px 8px', background: '#1a1a1a', color: '#00d4aa', border: '1px solid #00d4aa66', borderRadius: 6, fontSize: 13, outline: 'none', cursor: 'pointer' };
-          const is = { padding: '4px 6px', background: '#111', color: '#ccc', border: '1px solid #333', borderRadius: 4, fontSize: 12, outline: 'none', width: 80 };
-          return (
-            <>
-              <select value={colType} onChange={e => setColType(e.target.value)} style={ss}>
-                <option value="rc">RC 柱</option>
-                <option value="h">H 鋼柱</option>
-              </select>
-              <div style={{ background: '#111', border: '1px solid #00d4aa44', borderRadius: 6, minWidth: 140, overflow: 'hidden' }}>
-                {colTypes.map(t => (
-                  <div key={t.id} style={{ display: 'flex', alignItems: 'center', padding: '3px 6px', background: t.id === activeColTypeId ? '#00d4aa22' : 'transparent', cursor: 'pointer' }}
-                    onClick={() => { if (editingColTypeId !== t.id) setActiveColTypeId(t.id); }}>
-                    {editingColTypeId === t.id ? (
-                      <>
-                        <input value={editingColTypeForm.name ?? ''} onChange={e => setEditingColTypeForm(f => ({...f, name: e.target.value}))} style={{ ...is, width: 56 }} onClick={e => e.stopPropagation()} />
-                        <input value={editingColTypeForm.w ?? ''} type="number" onChange={e => setEditingColTypeForm(f => ({...f, w: e.target.value}))} style={{ ...is, width: 36, marginLeft: 4 }} onClick={e => e.stopPropagation()} />
-                        <input value={editingColTypeForm.h ?? ''} type="number" onChange={e => setEditingColTypeForm(f => ({...f, h: e.target.value}))} style={{ ...is, width: 36, marginLeft: 4 }} onClick={e => e.stopPropagation()} />
-                        <button onClick={e => { e.stopPropagation(); handleEditColType(t.id, editingColTypeForm.name, parseInt(editingColTypeForm.w), parseInt(editingColTypeForm.h)); }} style={{ ...ss, padding: '2px 6px', marginLeft: 4 }}>✓</button>
-                      </>
-                    ) : (
-                      <>
-                        <span style={{ color: t.id === activeColTypeId ? '#00d4aa' : '#aaa', fontSize: 12, flex: 1 }}>{t.name} ({t.w}×{t.h})</span>
-                        <button onClick={e => { e.stopPropagation(); setEditingColTypeId(t.id); setEditingColTypeForm({ name: t.name, w: String(t.w), h: String(t.h) }); }} style={{ background: 'none', border: 'none', color: '#666', cursor: 'pointer', fontSize: 11, padding: '0 3px' }}>✎</button>
-                        <button onClick={e => { e.stopPropagation(); handleDeleteColType(t.id); }} disabled={colTypes.length <= 1} style={{ background: 'none', border: 'none', color: colTypes.length <= 1 ? '#333' : '#666', cursor: colTypes.length <= 1 ? 'default' : 'pointer', fontSize: 11, padding: '0 3px' }}>✕</button>
-                      </>
-                    )}
-                  </div>
-                ))}
-              </div>
-              <button onClick={() => setColTypePanel(v => !v)} style={ss}>+</button>
-              {colTypePanel && (
-                <span style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-                  <input placeholder="名稱" value={colTypeForm.name} onChange={e => setColTypeForm(f => ({...f, name: e.target.value}))} style={is} />
-                  <input placeholder="寬" type="number" value={colTypeForm.w} onChange={e => setColTypeForm(f => ({...f, w: e.target.value}))} style={{ ...is, width: 44 }} />
-                  <input placeholder="深" type="number" value={colTypeForm.h} onChange={e => setColTypeForm(f => ({...f, h: e.target.value}))} style={{ ...is, width: 44 }} />
-                  <button onClick={handleAddColType} style={ss}>確認</button>
-                </span>
-              )}
-            </>
-          );
-        })()}
-        {(mode === 'door' || mode === 'window') && (() => {
-          const ss = { padding: '4px 8px', background: '#1a1a1a', color: '#00d4aa', border: '1px solid #00d4aa66', borderRadius: 6, fontSize: 13, outline: 'none', cursor: 'pointer' };
-          const is = { padding: '4px 6px', background: '#111', color: '#ccc', border: '1px solid #333', borderRadius: 4, fontSize: 12, outline: 'none', width: 80 };
-          const isDoor = mode === 'door';
-          const types = isDoor ? doorTypes : windowTypes;
-          const activeId = isDoor ? activeDoorTypeId : activeWindowTypeId;
-          const setActiveId = isDoor ? setActiveDoorTypeId : setActiveWindowTypeId;
-          const editingId = isDoor ? editingDoorTypeId : editingWindowTypeId;
-          const setEditingId = isDoor ? setEditingDoorTypeId : setEditingWindowTypeId;
-          const editingForm = isDoor ? editingDoorTypeForm : editingWindowTypeForm;
-          const setEditingForm = isDoor ? setEditingDoorTypeForm : setEditingWindowTypeForm;
-          const onEdit = isDoor ? handleEditDoorType : handleEditWindowType;
-          const onDelete = isDoor ? handleDeleteDoorType : handleDeleteWindowType;
-          const onAdd = isDoor ? handleAddDoorType : handleAddWindowType;
-          const panel = isDoor ? doorTypePanel : windowTypePanel;
-          const setPanel = isDoor ? setDoorTypePanel : setWindowTypePanel;
-          const form = isDoor ? doorTypeForm : windowTypeForm;
-          const setForm = isDoor ? setDoorTypeForm : setWindowTypeForm;
-          return (
-            <>
-              <div style={{ background: '#111', border: '1px solid #00d4aa44', borderRadius: 6, minWidth: 140, overflow: 'hidden' }}>
-                {types.map(t => (
-                  <div key={t.id} style={{ display: 'flex', alignItems: 'center', padding: '3px 6px', background: t.id === activeId ? '#00d4aa22' : 'transparent', cursor: 'pointer' }}
-                    onClick={() => { if (editingId !== t.id) setActiveId(t.id); }}>
-                    {editingId === t.id ? (
-                      <>
-                        <input value={editingForm.name ?? ''} onChange={e => setEditingForm(f => ({...f, name: e.target.value}))} style={{ ...is, width: 60 }} onClick={e => e.stopPropagation()} />
-                        <input value={editingForm.width ?? ''} type="number" onChange={e => setEditingForm(f => ({...f, width: e.target.value}))} style={{ ...is, width: 44, marginLeft: 4 }} onClick={e => e.stopPropagation()} />
-                        <button onClick={e => { e.stopPropagation(); onEdit(t.id, editingForm.name, parseInt(editingForm.width)); }} style={{ ...ss, padding: '2px 6px', marginLeft: 4 }}>✓</button>
-                      </>
-                    ) : (
-                      <>
-                        <span style={{ color: t.id === activeId ? '#00d4aa' : '#aaa', fontSize: 12, flex: 1 }}>{t.name} ({t.width})</span>
-                        <button onClick={e => { e.stopPropagation(); setEditingId(t.id); setEditingForm({ name: t.name, width: String(t.width) }); }} style={{ background: 'none', border: 'none', color: '#666', cursor: 'pointer', fontSize: 11, padding: '0 3px' }}>✎</button>
-                        <button onClick={e => { e.stopPropagation(); onDelete(t.id); }} disabled={types.length <= 1} style={{ background: 'none', border: 'none', color: types.length <= 1 ? '#333' : '#666', cursor: types.length <= 1 ? 'default' : 'pointer', fontSize: 11, padding: '0 3px' }}>✕</button>
-                      </>
-                    )}
-                  </div>
-                ))}
-              </div>
-              <button onClick={() => setPanel(v => !v)} style={ss}>+</button>
-              {panel && (
-                <span style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-                  <input placeholder="名稱" value={form.name} onChange={e => setForm(f => ({...f, name: e.target.value}))} style={is} />
-                  <input placeholder="寬度" type="number" value={form.width} onChange={e => setForm(f => ({...f, width: e.target.value}))} style={{ ...is, width: 56 }} />
-                  <button onClick={onAdd} style={ss}>確認</button>
-                </span>
-              )}
-            </>
-          );
-        })()}
-        {singleSel?.type === 'rawWall' && selWallObj && !selWallObj.isDoor && !selWallObj.isWindow && (
-          <select
-            value={selWallObj.typeId ?? ''}
-            onChange={e => {
-              const wt = wallTypes.find(t => t.id === e.target.value);
-              if (!wt) return;
-              saveHistory();
-              setRawWalls(prev => { const next = [...prev]; next[singleSel.idx] = { ...next[singleSel.idx], typeId: wt.id, thickness: wt.thickness }; return next; });
-            }}
-            style={{ padding: '6px 10px', background: '#1a1a1a', color: '#00d4aa', border: '1px solid #00d4aa66', borderRadius: 6, cursor: 'pointer', fontSize: 13, outline: 'none' }}>
-            {wallTypes.map(t => <option key={t.id} value={t.id}>{t.name} ({t.thickness}mm)</option>)}
-          </select>
+            </div>
+          ))}
+        </div>
+        {cfg.panel && (
+          <div style={{ display: 'flex', gap: 4, alignItems: 'center', marginTop: 6, flexWrap: 'wrap' }}>
+            <input placeholder="名稱" value={cfg.form.name} onChange={e => cfg.setForm(f => ({ ...f, name: e.target.value }))} style={{ ...panelInputStyle, width: 70 }} />
+            {cfg.fields.map(fd => (
+              <input key={fd.key} placeholder={fd.label} type="number" value={cfg.form[fd.key]} onChange={e => cfg.setForm(f => ({ ...f, [fd.key]: e.target.value }))} style={{ ...panelInputStyle, width: 48 }} />
+            ))}
+            <button onClick={cfg.onAdd} style={panelBtnStyle}>確認</button>
+          </div>
         )}
-        {singleSel?.type === 'col' && columns[singleSel.idx] && (
-          <select
-            value={columns[singleSel.idx].typeId ?? ''}
+      </div>
+    );
+  }
+
+  // 面板內容：選取優先（顯示被選物件的性質），否則依目前模式顯示 Type Selector
+  function renderProperties() {
+    if (selected.length > 1) {
+      return <div style={{ color: '#888', fontSize: 12, lineHeight: 1.8 }}>已選取 {selected.length} 個物件<br />Delete 刪除全部，ESC 清除選取</div>;
+    }
+    if (singleSel?.type === 'col' && columns[singleSel.idx]) {
+      const c = columns[singleSel.idx];
+      return (
+        <div>
+          <div style={sectionTitleStyle}>柱</div>
+          <select value={c.typeId ?? ''} style={typeSelectStyle}
             onChange={e => {
               const ct = colTypes.find(t => t.id === e.target.value);
               if (!ct) return;
               saveHistory();
               setColumns(prev => { const next = [...prev]; next[singleSel.idx] = { ...next[singleSel.idx], typeId: ct.id, w: ct.w, h: ct.h }; return next; });
-            }}
-            style={{ padding: '6px 10px', background: '#1a1a1a', color: '#00d4aa', border: '1px solid #00d4aa66', borderRadius: 6, cursor: 'pointer', fontSize: 13, outline: 'none' }}>
-            {colTypes.map(t => <option key={t.id} value={t.id}>{t.name} ({t.w}×{t.h})</option>)}
+            }}>
+            {colTypes.map(t => <option key={t.id} value={t.id}>{t.name}（{t.w}×{t.h}）</option>)}
           </select>
-        )}
-        {selected.length > 0 && (
-          <button onClick={() => deleteSelected(selected)}
-            style={{ padding: '6px 16px', background: '#ff6b9d22', color: '#ff6b9d', border: '1px solid #ff6b9d66', borderRadius: 6, cursor: 'pointer', fontSize: 13 }}>
-            刪除 {selected.length > 1 ? `(${selected.length})` : ''} [Del]
-          </button>
-        )}
-        <button onClick={handleClear}
-          style={{ padding: '6px 16px', background: '#1a1a1a', color: '#666', border: '1px solid #333', borderRadius: 6, cursor: 'pointer', fontSize: 13 }}>
-          清除
-        </button>
-        <label style={{ padding: '6px 16px', background: '#1a1a1a', color: '#888', border: '1px solid #333', borderRadius: 6, cursor: 'pointer', fontSize: 13 }}>
-          匯入 DXF
-          <input type="file" accept=".dxf" style={{ display: 'none' }} onChange={async e => {
-            const file = e.target.files[0];
-            if (!file) return;
-            const fd = new FormData();
-            fd.append('file', file);
-            try {
-              const res = await fetch('http://localhost:5000/api/upload-dxf', { method: 'POST', body: fd });
-              const data = await res.json();
-              if (data.error) { console.error('DXF 匯入錯誤:', data.error); return; }
-              const walls = data.walls ?? [];
-              const cols = data.columns ?? [];
-              // 直接使用 DXF 原始座標（DXF 的 0,0 對齊世界原點十字）
-              const newWalls = walls.map(w => ({
-                start: { x: w.start[0], y: w.start[1] },
-                end:   { x: w.end[0],   y: w.end[1] },
-                typeId: wallTypes[0]?.id,
-                thickness: w.thickness ?? wallTypes[0]?.thickness ?? THICKNESS,
-              }));
-              const newCols = cols.map(c => ({
-                cx: c.cx,
-                cy: c.cy,
-                type: 'rc',
-                rotated: Math.abs(Math.sin(c.angle)) > 0.5,
-                typeId: colTypes[0]?.id,
-                w: c.w,
-                h: c.h,
-              }));
-              console.log(`DXF 匯入：${newWalls.length} 條牆、${newCols.length} 根柱`);
+          <PropRow k="型式" v={c.type === 'rc' ? 'RC 柱' : 'H 鋼柱'} />
+          <PropRow k="尺寸" v={`${c.w ?? COL_W}×${c.h ?? COL_H}${c.rotated ? '（已旋轉）' : ''}`} />
+          <div style={noteStyle}>空白鍵旋轉，Delete 刪除</div>
+        </div>
+      );
+    }
+    if (singleSel?.type === 'rawWall' && selWallObj) {
+      if (selWallObj.isDoor || selWallObj.isWindow) {
+        const isD = selWallObj.isDoor;
+        const t = (isD ? doorTypes : windowTypes).find(x => x.id === selWallObj.typeId);
+        const span = Math.round(Math.hypot(selWallObj.ptB.x - selWallObj.ptA.x, selWallObj.ptB.y - selWallObj.ptA.y));
+        return (
+          <div>
+            <div style={sectionTitleStyle}>{isD ? '門' : '窗'}</div>
+            <PropRow k="類型" v={t ? `${t.name}（寬 ${t.width}）` : '—'} />
+            <PropRow k="開口寬" v={String(span)} />
+            <div style={noteStyle}>已放置的開口暫不支援換類型（幾何需重排）；點畫布上的雙箭頭可反轉方向</div>
+          </div>
+        );
+      }
+      const n = getNorm(selWallObj.start, selWallObj.end);
+      return (
+        <div>
+          <div style={sectionTitleStyle}>牆</div>
+          <select value={selWallObj.typeId ?? ''} style={typeSelectStyle}
+            onChange={e => {
+              const wt = wallTypes.find(t => t.id === e.target.value);
+              if (!wt) return;
               saveHistory();
-              setRawWalls(prev => [...prev, ...newWalls]);
-              if (newCols.length > 0) setColumns(prev => [...prev, ...newCols]);
-            } catch (err) {
-              console.error('連線失敗（確認後端是否啟動）:', err);
-            }
-            e.target.value = '';
-          }} />
-        </label>
+              setRawWalls(prev => { const next = [...prev]; next[singleSel.idx] = { ...next[singleSel.idx], typeId: wt.id, thickness: wt.thickness }; return next; });
+            }}>
+            {wallTypes.map(t => <option key={t.id} value={t.id}>{t.name}（{t.thickness}mm）</option>)}
+          </select>
+          <PropRow k="長度" v={String(Math.round(n?.len ?? 0))} />
+          <PropRow k="厚度" v={String(selWallObj.thickness ?? THICKNESS)} />
+          <div style={noteStyle}>點畫布上的標註數字可直接改長度；拖綠色端點可伸縮</div>
+        </div>
+      );
+    }
+    if (mode === 'wall') return renderTypeList(typePanelCfg.wall);
+    if (mode === 'column') return (
+      <div>
+        <select value={colType} onChange={e => setColType(e.target.value)} style={typeSelectStyle}>
+          <option value="rc">RC 柱</option>
+          <option value="h">H 鋼柱</option>
+        </select>
+        {renderTypeList(typePanelCfg.col)}
+      </div>
+    );
+    if (mode === 'door') return renderTypeList(typePanelCfg.door);
+    if (mode === 'window') return renderTypeList(typePanelCfg.window);
+    return (
+      <div style={{ color: '#666', fontSize: 12, lineHeight: 1.8 }}>
+        未選取物件<br />
+        牆段 {rawWalls.filter(w => !w.isDoor && !w.isWindow).length}、
+        門 {rawWalls.filter(w => w.isDoor).length}、
+        窗 {rawWalls.filter(w => w.isWindow).length}、
+        柱 {columns.length}
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ width: '100vw', height: '100vh', background: '#0f0f0f', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      {/* Ribbon：動詞區（要做什麼），仿 Revit 分群工具列 */}
+      <div style={{ display: 'flex', alignItems: 'stretch', background: '#161616', borderBottom: '1px solid #2a2a2a', padding: '6px 8px', zIndex: 10 }}>
+        <RibbonGroup label="建模">
+          {PLACE_MODES.map(m => (
+            <button key={m.key}
+              onClick={() => { setMode(m.key); setStartPt(null); setSelected([]); setSuspended(false); }}
+              style={{ padding: '6px 14px', background: mode === m.key ? '#00d4aa22' : '#1a1a1a', color: mode === m.key ? '#00d4aa' : '#888', border: `1px solid ${mode === m.key ? '#00d4aa66' : '#333'}`, borderRadius: 6, cursor: 'pointer', fontSize: 13 }}>
+              {m.label}
+            </button>
+          ))}
+        </RibbonGroup>
+        <RibbonGroup label="修改">
+          <button
+            onClick={() => { setMode('select'); setStartPt(null); setSuspended(false); }}
+            style={{ padding: '6px 14px', background: mode === 'select' ? '#00d4aa22' : '#1a1a1a', color: mode === 'select' ? '#00d4aa' : '#888', border: `1px solid ${mode === 'select' ? '#00d4aa66' : '#333'}`, borderRadius: 6, cursor: 'pointer', fontSize: 13 }}>
+            選取 [ESC]
+          </button>
+          <button onClick={() => deleteSelected(selected)} disabled={selected.length === 0}
+            style={{ padding: '6px 14px', background: selected.length > 0 ? '#ff6b9d22' : '#1a1a1a', color: selected.length > 0 ? '#ff6b9d' : '#444', border: `1px solid ${selected.length > 0 ? '#ff6b9d66' : '#2a2a2a'}`, borderRadius: 6, cursor: selected.length > 0 ? 'pointer' : 'default', fontSize: 13 }}>
+            刪除{selected.length > 1 ? ` (${selected.length})` : ''} [Del]
+          </button>
+        </RibbonGroup>
+        <RibbonGroup label="檔案">
+          <label style={{ padding: '6px 14px', background: '#1a1a1a', color: '#888', border: '1px solid #333', borderRadius: 6, cursor: 'pointer', fontSize: 13 }}>
+            匯入 DXF
+            <input type="file" accept=".dxf" style={{ display: 'none' }} onChange={async e => {
+              const file = e.target.files[0];
+              if (!file) return;
+              const fd = new FormData();
+              fd.append('file', file);
+              try {
+                const res = await fetch('http://localhost:5000/api/upload-dxf', { method: 'POST', body: fd });
+                const data = await res.json();
+                if (data.error) { console.error('DXF 匯入錯誤:', data.error); return; }
+                const walls = data.walls ?? [];
+                const cols = data.columns ?? [];
+                // 直接使用 DXF 原始座標（DXF 的 0,0 對齊世界原點十字）
+                const newWalls = walls.map(w => ({
+                  start: { x: w.start[0], y: w.start[1] },
+                  end:   { x: w.end[0],   y: w.end[1] },
+                  typeId: wallTypes[0]?.id,
+                  thickness: w.thickness ?? wallTypes[0]?.thickness ?? THICKNESS,
+                }));
+                const newCols = cols.map(c => ({
+                  cx: c.cx,
+                  cy: c.cy,
+                  type: 'rc',
+                  rotated: Math.abs(Math.sin(c.angle)) > 0.5,
+                  typeId: colTypes[0]?.id,
+                  w: c.w,
+                  h: c.h,
+                }));
+                console.log(`DXF 匯入：${newWalls.length} 條牆、${newCols.length} 根柱`);
+                saveHistory();
+                setRawWalls(prev => [...prev, ...newWalls]);
+                if (newCols.length > 0) setColumns(prev => [...prev, ...newCols]);
+              } catch (err) {
+                console.error('連線失敗（確認後端是否啟動）:', err);
+              }
+              e.target.value = '';
+            }} />
+          </label>
+          <button onClick={handleClear}
+            style={{ padding: '6px 14px', background: '#1a1a1a', color: '#666', border: '1px solid #333', borderRadius: 6, cursor: 'pointer', fontSize: 13 }}>
+            清除
+          </button>
+        </RibbonGroup>
       </div>
 
-      <div style={{ position: 'absolute', bottom: 16, left: 16, color: '#555', fontSize: 12 }}>{getHint()}</div>
+      <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
+        {/* 性質面板：名詞區（用什麼類型做），仿 Revit Properties palette */}
+        <div style={{ width: 264, flexShrink: 0, background: '#141414', borderRight: '1px solid #2a2a2a', overflowY: 'auto', padding: 10 }}>
+          <div style={{ fontSize: 12, color: '#00d4aa', fontWeight: 600, letterSpacing: 2, marginBottom: 10 }}>性質</div>
+          {renderProperties()}
+        </div>
 
+        {/* 畫布 */}
+        <div style={{ flex: 1, position: 'relative', minWidth: 0 }}>
       <svg ref={svgRef}
         style={{ width: '100%', height: '100%', cursor: panning ? 'grabbing' : dragging ? 'grabbing' : 'crosshair', touchAction: 'none' }}
         onClick={handleClick} onMouseMove={handleMouseMove} onMouseDown={handleMouseDown} onMouseUp={handleMouseUp} onWheel={handleWheel}>
@@ -1803,6 +1862,12 @@ if (mode !== 'wall') setSnapIndicator(null);
           );
         })()}
       </svg>
+        </div>
+      </div>
+
+      {/* 狀態列（底部提示，仿 Revit status bar） */}
+      <div style={{ padding: '5px 12px', background: '#161616', borderTop: '1px solid #2a2a2a', color: '#777', fontSize: 12 }}>{getHint()}</div>
+
       {editingDim && (
         <input
           autoFocus

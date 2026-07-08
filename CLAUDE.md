@@ -22,6 +22,11 @@
 
 5. **PR #4（DXF 匯入流程）已 merge 進 master**（merge commit `cc92f02`）。放棄了另一條純前端
    解析路線（PR #6，已關閉未合併）；現在的 DXF 匯入是後端 Flask + ezdxf 的版本。
+6. **UI 重構（對齊 Revit 邏輯）** — 頂部 Ribbon 分群工具列（建模/修改/檔案）、左側性質面板
+   （Type Selector + 選取物件性質）、底部狀態列。四種類型表（牆/柱/門/窗）統一成 `typePanelCfg`
+   + `renderTypeList()` 一套 UI。已用 Playwright 截圖驗證三種面板狀態。
+7. **Bug 修正**：`deleteSelected` 刪門/窗時，合併回來的牆段先前會丟失 `typeId`/`thickness`
+   （牆厚 fallback 回 15），已補上。
 
 > ⚠️ **DXF 匯入尚未大量測試** — 目前只用 repo 裡的 `test.dxf` 這一份測試圖驗證過（4 牆 + 5 柱），
 > 還沒拿真實圖面跑過。`pair_walls`/`cluster_columns` 的配對參數（牆厚範圍 8–30、柱群聚距離 50）
@@ -148,6 +153,15 @@
 | `placeOpening(walls, wallIdx, clickPt, type, flipped)` | 在牆上放置門或窗 |
 | `saveHistory()` | 捕捉目前 rawWalls+columns 快照到 history stack |
 | `undo()` / `redo()` | Ctrl+Z / Ctrl+Y 復原 |
+
+### UI 佈局（仿 Revit 三區）
+- **Ribbon（頂部）**：`RibbonGroup` 分群 — 建模（柱/牆/門/窗）、修改（選取/刪除）、檔案（匯入 DXF/清除）。
+  放「動詞」：要做什麼。
+- **性質面板（左側 264px）**：`renderProperties()` — 選取優先顯示物件性質（類型下拉 + 參數列 `PropRow`），
+  否則依模式顯示 Type Selector（`typePanelCfg` × `renderTypeList()`，四種類型表共用一套 UI）。
+  放「名詞」：用什麼類型做。
+- **狀態列（底部）**：`getHint()` 操作提示。
+- 畫布包在 flex 容器裡（不再是全螢幕絕對定位）；座標函式用 `svgRef` 的實際尺寸，不受佈局影響。
 
 ### 操作模式（`mode` state）
 - `column`：放置柱（C 鍵），空白鍵旋轉，支援 RC / H 鋼柱
