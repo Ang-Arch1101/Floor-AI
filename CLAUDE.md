@@ -20,16 +20,24 @@
 4. **幾何測試法** — `scratchpad/extract_and_test.js` 用 Babel 抽出 App.js 純函式跑斷言（27/27 pass）。
    ⚠️ 尚未收進 repo、沒有 `npm test`
 
+5. **PR #4（DXF 匯入流程）已 merge 進 master**（merge commit `cc92f02`）。放棄了另一條純前端
+   解析路線（PR #6，已關閉未合併）；現在的 DXF 匯入是後端 Flask + ezdxf 的版本。
+
+> ⚠️ **DXF 匯入尚未大量測試** — 目前只用 repo 裡的 `test.dxf` 這一份測試圖驗證過（4 牆 + 5 柱），
+> 還沒拿真實圖面跑過。`pair_walls`/`cluster_columns` 的配對參數（牆厚範圍 8–30、柱群聚距離 50）
+> 是針對這份測試圖調的，換一張真實圖面很可能要重新調整，牆柱接合裁切是否正確也還沒驗證。
+> 在確認這點之前，不要把 DXF 匯入當成穩定可用的功能。
+
 **下一個（候選，待使用者選）：**
+- DXF 匯入用真實圖面驗證，視結果調整 `pair_walls`/`cluster_columns` 參數
+- 匯出 pipeline（DXF 匯出 / AutoCAD COM 寫回）— 產品核心交付，建議另開新分支，不跟匯入混在一起
 - 把幾何測試正式化進 repo（加 `npm test`）
 - 改既有門窗種類寬度 → 套用到已放置開口（stretch；需 `findOpeningGroup` 重算 ptA/ptB）
-- 匯出 pipeline（DXF 匯出 / AutoCAD COM 寫回）— 產品核心交付
-- DXF 匯入收尾（牆柱接合裁切驗證、解析穩健性，需真實圖樣本）
 
-**先前完成：** DXF 匯入（後端 ezdxf 牆/柱還原）、無限畫布 pan/zoom、牆端點拖拉、
+**先前完成：** DXF 匯入（後端 ezdxf 牆/柱還原，已 merge）、無限畫布 pan/zoom、牆端點拖拉、
 牆/柱種類系統、Ctrl+Z/Y 復原
 
-**目前分支：** `claude/dxf-import`（PR #4）
+**目前分支：** `claude/dxf-import-progress-qtdbet`（已同步至 master `cc92f02`）
 
 ---
 
@@ -190,14 +198,15 @@ worldToScreen(wx, wy) → { x: wx*scale + offsetX, y: svgH - (wy*scale + offsetY
 - 最多保留 50 步
 
 ### 已知限制（暫緩）
+- **DXF 匯入尚未大量測試** — 只驗證過 `test.dxf`，真實圖面未測；柱配對參數（GAP/CLUSTER）是
+  針對這份測試圖調的，其他圖面可能需調；牆柱接合裁切是否正確也待確認。**目前不能當穩定功能用。**
+- DXF 解析只處理 LINE / LWPOLYLINE
 - 斜牆支援：disabled（畫牆強制正交 `applyOrthoLock`；接合幾何是向量算的、理論上支援斜角但未測）
 - **per-wall thickness 已完成**（牆-牆/牆-柱/門窗）。唯二仍用全域 `THICKNESS` 的是「門窗開口的
   放置 click 容差」與「拖放 dead-zone」——屬互動容差、非接合幾何，影響小，暫留
 - 改既有門窗種類寬度 → 尚未套用到「已放置」的開口（需 `findOpeningGroup` 重算 ptA/ptB）。
   目前只支援「新放置用選定寬度」
 - 幾何測試（`scratchpad/extract_and_test.js`）尚未收進 repo、無 `npm test`
-- DXF 牆柱接合裁切待確認（匯入後牆與角柱的接合處是否正確）
-- DXF 解析只處理 LINE / LWPOLYLINE；柱配對參數（GAP/CLUSTER）對 test.dxf 調過，其他圖面可能需調
 
 ---
 
