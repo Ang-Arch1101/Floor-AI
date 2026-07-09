@@ -1,17 +1,21 @@
 # FloorAI 程式碼索引
-> 更新：2026-07-08｜對應：merge PR #4（cc92f02）後 + UI 重構（Ribbon/性質面板/狀態列）
+> 更新：2026-07-08｜對應：DXF 匯出 MVP 完成後（geometry.js 抽離 + UI 重構 + PR #4 merge）
 
 > ⚠️ **DXF 匯入尚未大量測試** — 只驗證過 `test.dxf`，真實圖面未測，配對參數/接合裁切可能需要調整。
 > 詳見本檔案最後的「已知限制」與 `CLAUDE.md`。
 
+**單位約定**：世界座標 1 unit = 1 cm（牆厚 15、門寬 80 皆為公分語意）；DXF 匯出寫 `$INSUNITS=5`。
+
 ---
 
-## 後端（`backend/`）— PR #4 新增
+## 後端（`backend/`）
 
-### `backend/app.py`（42 行）
+### `backend/app.py`（111 行）
 | 內容 | 行號 | 說明 |
 |------|------|------|
-| `POST /api/upload-dxf` | L11 | 接收上傳的 `.dxf` 檔，存暫存檔後呼叫 `parse_dxf`，回傳 `{status, raw_count, wall_count, col_count, walls, columns}` |
+| `EXPORT_LAYERS` | L13 | 匯出圖層與 ACI 顏色：WALL/COL/DOOR/WINDOW |
+| `POST /api/upload-dxf` | L22 | 接收 `.dxf` 檔，呼叫 `parse_dxf`，回傳 `{walls, columns, ...}` |
+| `POST /api/export-dxf` | L52 | 收 `{lines, arcs, scale?}` → ezdxf R2010、`$INSUNITS=5`、分圖層寫 LINE/ARC → 回傳檔案下載 |
 
 ### `backend/dxf_parser.py`（197 行）
 | 名稱 | 行號 | 說明 |
@@ -21,233 +25,145 @@
 | `try_pair(a, b, ...)` | L39 | 兩線段平行 + 間距 8–30 + 重疊 ≥50 → 配成一道牆（中心線 + 量到的厚度） |
 | `pair_walls(segments)` | L84 | 貪婪配對平行線段成牆，回傳 `(walls, leftover)` |
 | `cluster_columns(segments, ...)` | L107 | union-find 依端點鄰近（<50）把零散線段分群 → bounding box 當柱 |
-| `parse_dxf(file_path)` | L161 | 主流程：用 ezdxf 讀 LINE/LWPOLYLINE → segments，配對成牆 + 分群成柱 |
+| `parse_dxf(file_path)` | L161 | 主流程：ezdxf 讀 LINE/LWPOLYLINE → segments，配對成牆 + 分群成柱 |
 
-- 測試檔：根目錄 `test.dxf`（4 牆 + 5 柱，其中一根是遠處孤立參考柱）
+- 測試檔：根目錄 `test.dxf`（4 牆 + 5 柱）
 - 依賴：`flask`、`flask-cors`、`ezdxf`（`pip install flask flask-cors ezdxf`，`python app.py` 監聽 :5000）
 
 ---
 
-## 前端（`src/App.js`，1893 行）
+## 幾何模組（`src/geometry.js`，825 行）— 與 React 無關的純函式
 
-## 全域常數（L3–L11）
+App.js 渲染管線與 DXF 匯出共用；`npm test` 直接對這裡斷言（`src/geometry.test.js`，12 個測試）。
 
-| 名稱 | 值 | 說明 |
-|------|-----|------|
-| `GRID` | 20 | 吸附格距 |
-| `THICKNESS` | 15 | 全域預設牆厚（各牆已改為 per-wall，只作 fallback） |
-| `DOOR_WIDTH` | 80 | 門預設寬度（fallback，實際用 `doorTypes`） |
-| `WINDOW_WIDTH` | 80 | 窗預設寬度（fallback，實際用 `windowTypes`） |
-| `WINDOW_INSET` | 8 | 窗內縮距離 |
-| `GLASS_OFFSET` | 1 | 玻璃線偏移 |
-| `FLIP_ICON_OFFSET` | 28 | 翻轉圖示偏移 |
-| `COL_W` | 80 | 柱預設寬 |
-| `COL_H` | 100 | 柱預設高 |
-| `ENDPOINT_EPS` | 0.02 | 端點判斷容差（L220） |
-| `DIM_OFFSET` | 30 | 尺寸線偏移距離（L654） |
-| `ARROW_SIZE` | 6 | 尺寸箭頭大小（L655） |
+### 常數（L4–12、L221）
+`GRID=20`、`THICKNESS=15`、`DOOR_WIDTH=80`、`WINDOW_WIDTH=80`、`WINDOW_INSET=8`、
+`GLASS_OFFSET=1`、`FLIP_ICON_OFFSET=28`、`COL_W=80`、`COL_H=100`、`ENDPOINT_EPS=0.02`
 
----
-
-## 全域函式（App 元件之外）
-
+### 基礎與物件操作
 | 函式 | 行號 | 說明 |
 |------|------|------|
-| `snap(v)` | L13 | 吸附到 GRID 格點 |
-| `applyOrthoLock(pt, ref)` | L15 | 正交鎖定 |
-| `getNorm(start, end)` | L22 | 取單位法向量 → `{dx,dy,len,nx,ny}` |
-| `computeWallLines(start, end, thickness?)` | L29 | 計算兩條 offset 線 → `{line1,line2}` |
-| `distToWall(pt, wall)` | L39 | 點到牆中心線的最短距離 |
-| `ptBetweenWallLines(pt, wall)` | L48 | 點是否在牆體範圍內（per-wall thickness，hit test 用） |
-| `distToOpening(pt, obj)` | L57 | 點到門/窗中心的距離 |
-| `projectOnWall(pt, wall)` | L63 | 點在牆上的投影參數 t（0–1） |
-| `getFixedEnd(wall, rawWalls)` | L70 | 判斷哪端是 T 型固定端 → `'start'/'end'/'center'`（per-wall EPS） |
-| `placeOpening(walls, wallIdx, clickPt, type, flipped, openingType)` | L91 | 在牆上插入門或窗（截斷成3段）；開口與兩側牆段繼承宿主牆 thickness/typeId，開口另存自己的 `width`/`typeId`（door/windowTypes 命名空間） |
-| `findOpeningGroup(walls, idx)` | L121 | 找門/窗的左右相鄰牆段 |
-| `mergeOpening(walls, group)` | L127 | 合併門/窗的三段回一段（拖曳前用），還原 typeId/thickness |
-| `getColCorners(col)` | L135 | 取柱的 hw/hh（考慮 rotated） |
-| `ptInCol(pt, col)` | L143 | 點是否在柱體範圍內 |
-| `splitWallByColumns(wall, columns)` | L150 | 單牆被多柱截斷 → 段陣列 |
-| `splitAllWallsByColumn(rawWalls, col)` | L198 | 所有牆被新柱截斷 |
-| `segIntersectT(ax0,ay0,ax1,ay1,bx0,by0,bx1,by1)` | L207 | 線段交叉，回傳 `{tA,tB}` |
-| `splitByWallIntersections(newWall, rawWalls)` | L222 | 畫新牆時的 T/十字截斷 → `{newSegments, updatedWalls}`（per-wall thickness） |
-| `getWallGaps(wall, rawWalls)` | L308 | 計算十字接合缺口 → `{posGaps, negGaps}`；拆 `hSelf`/`hOther` 分別用自己/對方的厚度 |
-| `getColGaps(col, rawWalls)` | L385 | 計算柱側面缺口 → `{top,bottom,left,right}`（用各牆自己的厚度） |
-| `clipOffsetLineOutsideCol(x0,y0,x1,y1,col)` | L420 | 裁切 offset 線，不進入柱體 |
-| `computeMiter(wallA, wallB, hA?, hB?)` | L444 | 計算 L 角 miter 點 → `{pos,neg}`；`hA`/`hB` 各牆半厚，預設 `THICKNESS/2` |
-| `computeAllMiters(rawWalls)` | L463 | 計算所有 L 角 miter → `{[wallIdx]: {start,end}}`，per-wall 厚度傳入 `computeMiter` |
-| `computeWallDragInfo(wall, wallIdx, rawWalls, columns)` | L517 | 計算牆拖曳限制與 snap 點；柱 snap 角落用 `wall.thickness` 退縮 |
-| `EdgeWithGaps` | L601 | 含缺口的線段元件（把間隔裂開渲染） |
-| `clipStubEnd(px,py,rawWalls,currentWall)` | L614 | T 型接合：stub 端點截到 through-wall 外緣（`hSelf`/`hOther` 分開） |
-| `WallDimAnnotation` | L657 | 選取牆時的尺寸標註（箭頭＋數字，含點擊觸發輸入）；延伸線起點用 `wall.thickness` |
-| `WallSegment` | L697 | 渲染單一牆段（含 miter/clip/gap，用 `wall.thickness`） |
-| `DoorSegment` | L734 | 渲染門（線＋弧）；jamb 用 `door.thickness`，弧半徑用實際門扇跨距 `span` |
-| `WindowSegment` | L745 | 渲染窗（雙線＋玻璃線），用 `win.thickness` |
-| `RCColumn` | L753 | 渲染 RC 柱（四邊含缺口） |
-| `HColumn` | L760 | 渲染 H 鋼柱（外框＋翼板＋腹板） |
-| `FlipIcon` | L766 | 門/窗翻轉圖示（雙箭頭） |
-| `isInSel(selected, item)` | L775 | 判斷 item 是否在選取陣列中 |
-| `RibbonGroup` | L778 | Ribbon 分群容器（一組按鈕 + 下方群組名稱） |
-| `PropRow` | L788 | 性質面板的一列「參數名：值」 |
-| `PLACE_MODES` | L797 | 工具列模式清單（柱/牆/門/窗） |
+| `snap(v)` | L14 | 吸附到 GRID 格點 |
+| `applyOrthoLock(pt, ref)` | L16 | 正交鎖定 |
+| `getNorm(start, end)` | L23 | 取單位法向量 → `{dx,dy,len,nx,ny}` |
+| `computeWallLines(start, end, thickness?)` | L30 | 計算兩條 offset 線 → `{line1,line2}` |
+| `distToWall(pt, wall)` | L40 | 點到牆中心線的最短距離 |
+| `ptBetweenWallLines(pt, wall)` | L49 | 點是否在牆體範圍內（per-wall thickness） |
+| `distToOpening(pt, obj)` | L58 | 點到門/窗中心的距離 |
+| `projectOnWall(pt, wall)` | L64 | 點在牆上的投影參數 t（0–1） |
+| `getFixedEnd(wall, rawWalls)` | L71 | 判斷哪端是 T 型固定端 |
+| `placeOpening(walls, wallIdx, clickPt, type, flipped, openingType)` | L92 | 插入門/窗（截成3段，繼承宿主牆厚） |
+| `findOpeningGroup(walls, idx)` | L122 | 找門/窗的左右相鄰牆段 |
+| `mergeOpening(walls, group)` | L128 | 合併三段回一段（還原 typeId/thickness） |
+| `getColCorners(col)` / `ptInCol(pt, col)` | L136/L144 | 柱範圍計算與命中測試 |
+| `splitWallByColumns` / `splitAllWallsByColumn` | L151/L199 | 牆被柱截斷（資料層） |
+| `segIntersectT(...)` | L208 | 線段交叉 → `{tA,tB}` |
 
----
-
-## App 元件 — useState（L805–L864）
-
-| state | 說明 |
-|-------|------|
-| `rawWalls` | 所有牆/門/窗（localStorage 持久化） |
-| `columns` | 所有柱（localStorage 持久化） |
-| `startPt` / `cursor` / `mode` / `colType` | 畫牆起點、滑鼠世界座標、模式、柱類型 |
-| `dragging` / `dragPreview` | 拖曳門/窗的暫態與預覽 |
-| `selected` | `[{type, idx}]` 選取陣列 |
-| `previewRotated` / `suspended` | 柱預覽旋轉、ESC 暫停 |
-| `dragWall` / `wallDragPending` / `wallDragPendingRef` | 拖曳牆的暫態（pending → active） |
-| `snapIndicator` / `editingDim` / `svgRef` | snap 紅圈、尺寸輸入暫態、SVG ref |
-| `viewTransform` / `panning` / `endpointDrag` | 無限畫布、中鍵平移、端點拖拉暫態 |
-| `wallTypes` / `activeWallTypeId` | 牆種類（localStorage 持久化）與目前選用 id |
-| `colTypes` / `activeColTypeId` | 柱種類與目前選用 id |
-| `doorTypes` / `activeDoorTypeId`（L819–822） | 門寬種類 `[{id,name,width}]`，localStorage 持久化 |
-| `windowTypes` / `activeWindowTypeId`（L823–826） | 窗寬種類，同上 |
-| `wallTypePanel` / `wallTypeForm` / `colTypePanel` / `colTypeForm` | 牆/柱種類新增面板與表單 |
-| `doorTypePanel` / `doorTypeForm`（L831–832） | 門種類新增面板與表單 |
-| `windowTypePanel` / `windowTypeForm`（L833–834） | 窗種類新增面板與表單 |
-| `editingWallTypeId/Form` / `editingColTypeId/Form` | 牆/柱種類編輯暫態 |
-| `editingDoorTypeId/Form`（L839–840） / `editingWindowTypeId/Form`（L841–842） | 門/窗種類編輯暫態 |
-| `history` / `future` | undo/redo 快照堆疊（最多 50 步） |
-
----
-
-## App 元件 — useMemo / 衍生值（L866–L869）
-
-| 名稱 | 行號 | 說明 |
-|------|------|------|
-| `wallMiters` | L866 | `computeAllMiters(rawWalls)` 的快取 |
-| `singleSel` | L868 | `selected.length===1 ? selected[0] : null` |
-| `selWallObj` | L869 | 目前選取的牆物件（或 null） |
-
----
-
-## App 元件 — useEffect（L871–L910）
-
-| 行號 | 說明 |
-|------|------|
-| L871 | 鍵盤快捷鍵（ESC/C/W/D/N/Space/Delete/Ctrl+Z/Ctrl+Y） |
-| L903 | localStorage 同步（rawWalls/columns/wallTypes/colTypes/**doorTypes/windowTypes**） |
-
----
-
-## App 元件 — 函式
-
+### 接合幾何（render 層與匯出共用）
 | 函式 | 行號 | 說明 |
 |------|------|------|
-| `saveHistory()` | L912 | 捕捉目前快照到 history |
-| `undo()` | L917 | Ctrl+Z |
-| `redo()` | L925 | Ctrl+Y |
-| `applyNewLength(wallIdx, newLen)` | L933 | 輸入數值後更新牆長（固定 T 型端） |
-| `handleClear()` | L955 | 清除全部（含確認提示） |
-| `handleAddWallType()` | L962 | 新增牆種類 |
-| `handleAddColType()` | L972 | 新增柱種類 |
-| `handleEditWallType(id, name, thickness)` | L982 | 編輯牆種類（同步更新所有引用） |
-| `handleDeleteWallType(id)` | L989 | 刪除牆種類（fallback 改預設） |
-| `handleEditColType(id, name, w, h)` | L1000 | 編輯柱種類 |
-| `handleDeleteColType(id)` | L1007 | 刪除柱種類 |
-| `handleAddDoorType()` | L1018 | 新增門種類 |
-| `handleEditDoorType(id, name, width)` | L1030 | 編輯門種類（不套用到已放置開口，僅影響未來放置） |
-| `handleDeleteDoorType(id)` | L1035 | 刪除門種類（fallback 改預設） |
-| `handleAddWindowType()` | L1046 | 新增窗種類 |
-| `handleEditWindowType(id, name, width)` | L1056 | 編輯窗種類 |
-| `handleDeleteWindowType(id)` | L1061 | 刪除窗種類 |
-| `deleteSelected(sel)` | L1072 | 刪除選取物件；刪門/窗時合併回的牆段保留 typeId/thickness |
-| `screenToWorld(sx, sy)` | L1097 | 畫面座標 → 世界座標（Y 朝上） |
-| `worldToScreen(wx, wy)` | L1105 | 世界座標 → 畫面座標 |
-| `getRawPt(e)` | L1113 | 滑鼠事件 → 未 snap 的世界座標 |
-| `getPoint(e)` | L1120 | 滑鼠事件 → snap 後的世界座標 |
-| `hitTest(pt)` | L1122 | 點擊命中測試 → `{type,idx}` 或 null |
-| `handleMouseDown(e)` | L1131 | 中鍵平移、端點拖拉、牆拖曳 pending、門窗拖曳 |
-| `applyWallSnap(pt)` | L1221 | App 內部函式（縮排是 rebase 遺留的格式問題，仍在 `App()` 作用域內）；兩階段 snap，per-wall thickness |
-| `handleMouseMove(e)` | L1268 | 平移/端點拖拉/牆拖曳 promote＆移動/門窗拖曳預覽 |
-| `handleMouseUp(e)` | L1371 | 結束各種拖曳 |
-| `handleWheel(e)` | L1412 | 滾輪縮放（對準滑鼠位置，Y 軸錨點已修正） |
-| `handleFlip()` | L1427 | 翻轉門/窗 |
-| `handleClick(e)` | L1432 | 選取/放置柱/畫牆第二點/放置門窗 |
-| `getHint()` | L1525 | 狀態列提示文字 |
-| `typePanelCfg` | L1552 | 四種類型表（牆/柱/門/窗）的面板設定：欄位、handler、顯示格式 |
-| `renderTypeList(cfg)` | L1600 | Type Selector：類型清單（選用/✎編輯/✕刪除/+新增），四種類型共用 |
-| `renderProperties()` | L1643 | 性質面板內容：選取優先顯示物件性質，否則依模式顯示 Type Selector |
+| `splitByWallIntersections(newWall, rawWalls)` | L223 | 畫新牆時的 T/十字截斷（資料層） |
+| `getWallGaps(wall, rawWalls)` | L309 | 十字接合缺口（hSelf/hOther 各用自己厚度） |
+| `getColGaps(col, rawWalls)` | L386 | 柱四邊缺口 |
+| `clipOffsetLineOutsideCol(...)` | L421 | offset 線裁到柱外 |
+| `computeMiter(wallA, wallB, hA?, hB?)` | L445 | L 角 miter 點 |
+| `computeAllMiters(rawWalls)` | L464 | 所有 L 角 miter（per-wall 厚度） |
+| `computeWallDragInfo(...)` | L518 | 牆拖曳限制與 snap 點 |
+| `clipStubEnd(px, py, rawWalls, currentWall)` | L602 | T 型 stub 端點裁到貫穿牆外緣 |
 
----
-
-## App 元件 — Render 層衍生值（L1503–L1523）
-
-| 名稱 | 行號 | 說明 |
+### DXF 匯出組裝（L647–785）
+| 函式 | 行號 | 說明 |
 |------|------|------|
-| `activeWT` | L1503 | 目前選用的牆種類物件 |
-| `preview` | L1504 | 畫牆第一點後的線段預覽 |
-| `activeCT` | L1505 | 目前選用的柱種類物件 |
-| `colPreview` | L1506 | 柱放置預覽物件 |
-| `openingPreview` | L1508 | 門/窗放置預覽物件（用 `activeDoorTypeId`/`activeWindowTypeId` 決定寬度） |
+| `splitEdgeByGaps(x0,y0,x1,y1,gaps)` | L647 | 一條邊被 gaps 切開後的子線段（EdgeWithGaps 的計算部分） |
+| `wallExportLines(wall, rawWalls, columns, miter)` | L664 | 對應 WallSegment：miter/T 裁切 → 柱裁切 → 缺口 |
+| `doorExportGeometry(door)` | L696 | 對應 DoorSegment：2 門框線 + 門扇線 + 90° 開門弧（DXF ARC 逆時針） |
+| `windowExportLines(win)` | L720 | 對應 WindowSegment：6 框線 + 2 玻璃線 |
+| `columnExportLines(col, rawWalls)` | L738 | RC 柱四邊含缺口；H 柱外框+翼板+腹板 16 線 |
+| `buildExportGeometry(rawWalls, columns)` | L767 | 主入口：整場景 → `{lines:[{x1,y1,x2,y2,layer}], arcs:[...]}` |
 
 ---
 
-## JSX 結構摘要（L1723–1893）— 仿 Revit 三區佈局
+## 前端（`src/App.js`，1319 行）
 
+### 全域 UI 元件（App 元件之外）
+| 元件 | 行號 | 說明 |
+|------|------|------|
+| `EdgeWithGaps` | L39 | 含缺口的線段（把間隔裂開渲染） |
+| `WallDimAnnotation` | L55 | 選取牆時的尺寸標註（含點擊觸發輸入） |
+| `WallSegment` | L95 | 渲染單一牆段（miter/clip/gap，per-wall thickness） |
+| `DoorSegment` | L132 | 渲染門（jamb 用宿主牆厚、弧半徑=門扇跨距） |
+| `WindowSegment` | L143 | 渲染窗（雙線＋玻璃線） |
+| `RCColumn` / `HColumn` | L151/L158 | 渲染柱 |
+| `FlipIcon` | L164 | 門/窗翻轉圖示 |
+| `isInSel(selected, item)` | L173 | 選取判斷 |
+| `RibbonGroup` | L176 | Ribbon 分群容器 |
+| `PropRow` | L186 | 性質面板參數列 |
+| `PLACE_MODES` | L195 | 模式清單（柱/牆/門/窗） |
+
+### App 元件（L202 起）
+| 區塊 | 行號 | 說明 |
+|------|------|------|
+| useState 區 | L203–262 | rawWalls/columns/viewTransform/四種類型表與編輯狀態/history 等（同前版，見 CLAUDE.md 資料結構） |
+| `wallMiters` useMemo | L264 | `computeAllMiters` 快取 |
+| 鍵盤快捷鍵 useEffect | L269 | ESC/C/W/D/N/Space/Delete/Ctrl+Z/Y |
+| localStorage 同步 useEffect | L301 | 六張表 |
+| `saveHistory` / `undo` / `redo` | L310/L315/L323 | 復原系統 |
+| `applyNewLength` | L331 | 輸入數值改牆長 |
+| `handleClear` | L353 | 清除全部 |
+| 類型 CRUD ×4 | L360–468 | wall/col/door/window 的 Add/Edit/Delete handler |
+| `deleteSelected` | L470 | 刪除選取；刪門窗時合併段保留 typeId/thickness |
+| `screenToWorld` / `worldToScreen` | L495/L503 | 座標換算（Y 朝上） |
+| `getRawPt` / `getPoint` / `hitTest` | L511/L518/L520 | 滑鼠座標與命中 |
+| `handleMouseDown` | L529 | 平移/端點拖拉/牆拖曳 pending/門窗拖曳 |
+| `applyWallSnap` | L619 | 畫牆兩階段 snap |
+| `handleMouseMove` / `handleMouseUp` | L666/L769 | 拖曳主邏輯 |
+| `handleWheel` / `handleFlip` / `handleClick` | L810/L825/L830 | 縮放/翻轉/點擊放置 |
+| `getHint` | L923 | 狀態列提示 |
+| `typePanelCfg` | L950 | 四種類型表的面板設定 |
+| `renderTypeList` / `renderProperties` | L998/L1041 | 性質面板（Type Selector / 物件性質） |
+| return JSX | L1121– | 三區佈局 |
+
+### JSX 結構（仿 Revit 三區）
 ```
-<div flex column>                        // 根容器（flex，不再是絕對定位疊圖層）
-  <div>                                  // ── Ribbon（頂部工具列）
-    <RibbonGroup 建模>  柱/牆/門/窗（PLACE_MODES）
-    <RibbonGroup 修改>  選取 [ESC]、刪除 [Del]（無選取時 disabled）
-    <RibbonGroup 檔案>  匯入 DXF（<label>+隱藏 input，POST /api/upload-dxf）、清除
+<div flex column>
+  Ribbon：建模（柱/牆/門/窗）｜修改（選取/刪除）｜檔案（匯入 DXF / 匯出 DXF / 清除）
+  <div flex row>
+    性質面板（264px）：renderProperties()
+    畫布容器：<svg> 原點十字 + <g matrix Y-flip> 場景 </g> + 端點控制點
   </div>
-  <div flex row>                         // ── 主區
-    <div width:264>                      // 性質面板（Properties palette）
-      {renderProperties()}               //   選取物件 → 類型下拉 + PropRow 參數列
-                                         //   放置模式 → renderTypeList(typePanelCfg[kind])
-                                         //   無選取   → 物件統計
-    </div>
-    <div flex:1 relative>                // 畫布容器
-      <svg ref={svgRef}>
-        原點十字（在 <g transform> 之外）
-        <g transform="matrix(s,0,0,-s,offX,svgH-offY)">   // Y-flip 世界座標
-          columns.map → RCColumn / HColumn
-          rawWalls.map → WallSegment / DoorSegment / WindowSegment
-          WallDimAnnotation（選取牆時）／FlipIcon（選取門/窗時）
-          各種預覽（門/窗拖曳、畫牆、柱、開口）／snapIndicator 紅圈
-        </g>
-        端點控制點（在 <g transform> 之外，用 worldToScreen 定位）
-      </svg>
-    </div>
-  </div>
-  <div>                                  // ── 狀態列（底部）：getHint()
-  editingDim 輸入框（HTML，fixed 定位）
+  狀態列：getHint()
+  editingDim 輸入框（fixed）
 </div>
 ```
+- 「匯出 DXF」按鈕：`buildExportGeometry(rawWalls, columns)` → POST `/api/export-dxf` → blob 下載 `floorai.dxf`
+- 「匯入 DXF」：`<input type=file>` → POST `/api/upload-dxf` → walls/columns 疊加進 state（可 Ctrl+Z）
 
----
-
-## 座標換算
-
+### 座標換算
 ```js
 screenToWorld(sx, sy) → { x: (sx - offsetX) / scale, y: (svgH - sy - offsetY) / scale }
 worldToScreen(wx, wy) → { x: wx*scale + offsetX, y: svgH - (wy*scale + offsetY) }
 ```
-
 SVG `<g transform>`: `matrix(scale, 0, 0, -scale, offsetX, svgH - offsetY)`
+> `<text>` 在 Y-flip `<g>` 內會顛倒，需 `scale(1,-1)` 補償（見 WallDimAnnotation）
 
-> **注意**：`<text>` 在 Y-flip `<g>` 內會上下顛倒，需用 `<g transform="translate(cx,cy) scale(1,-1)">` 補償（見 WallDimAnnotation L685）
-> pan `offsetY` 方向已修正為反號（`origOffsetY - dy`，見 `handleMouseMove` L1252），拖曳跟手
+---
+
+## 測試
+
+- `npm test`（react-scripts / jest）→ `src/geometry.test.js`：12 個斷言
+  （splitEdgeByGaps、等厚/異厚 L 角 miter、十字缺口、T 型裁切、門/窗/柱/H柱匯出組裝）
+- E2E round-trip 驗證過：匯出 → 下載 → 回傳 `/api/upload-dxf` → 3 牆（厚 15）+ 1 柱 還原成功
 
 ---
 
 ## 已知限制
 
-- ⚠️ **DXF 匯入尚未大量測試**：只用 `test.dxf` 驗證過（4 牆 + 5 柱），真實圖面未測；
-  `pair_walls`/`cluster_columns` 的配對參數（`backend/dxf_parser.py` L5–10）是針對這份測試圖調的，
-  換圖可能要重調；匯入後牆與角柱的接合裁切是否正確也還沒驗證
-- DXF 解析只處理 LINE / LWPOLYLINE
-- per-wall thickness 已完成（牆-牆/牆-柱/門窗接合幾何）；仍用全域 `THICKNESS` 的只剩「開口放置
-  click 容差」與「拖放 dead-zone」（互動容差，非接合幾何）
-- 改既有門窗種類寬度不會套用到「已放置」的開口（需 `findOpeningGroup` 重算 ptA/ptB，目前是 deferred stretch）
-- 幾何測試（`scratchpad/extract_and_test.js`，27/27 pass）尚未收進 repo，沒有正式 `npm test`
-- 斜牆不支援（`applyOrthoLock` 強制水平/垂直；接合幾何本身是向量算的，理論上支援斜角但未測）
+- ⚠️ **DXF 匯入尚未大量測試**：只用 `test.dxf` 驗證過，真實圖面未測；配對參數
+  （`backend/dxf_parser.py` L5–10）針對測試圖調的，換圖可能要重調
+- DXF 解析只處理 LINE / LWPOLYLINE；真實圖面的 mm 單位（牆厚 100–300）會讓 GAP 參數失效，
+  需要單位/比例處理
+- AutoCAD COM 寫回未做（匯出目前到 DXF 檔為止）
+- per-wall thickness 已完成；仍用全域 `THICKNESS` 的只剩開口放置 click 容差與拖放 dead-zone
+- 改類型寬度不套用到已放置的開口；已放置開口不能換類型
+- 斜牆不支援（正交鎖定）
+- undo 快照不含四張類型表

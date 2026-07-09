@@ -27,6 +27,18 @@
    + `renderTypeList()` 一套 UI。已用 Playwright 截圖驗證三種面板狀態。
 7. **Bug 修正**：`deleteSelected` 刪門/窗時，合併回來的牆段先前會丟失 `typeId`/`thickness`
    （牆厚 fallback 回 15），已補上。
+8. **DXF 匯出 MVP** — 閉環「匯入→修改→輸出」的輸出端第一步：
+   - **`src/geometry.js` 抽離**：所有純幾何函式搬出 App.js（App.js 1893→1319 行），
+     渲染管線與匯出共用同一套接合計算
+   - **`npm test` 進 repo**：`src/geometry.test.js` 12 個斷言（miter/gap/T 裁切/匯出組裝）
+   - `buildExportGeometry()`：收集「畫面上實際渲染的幾何」（miter/T 裁切/十字缺口/柱裁切
+     都反映在線段上）→ `{lines, arcs}`
+   - 後端 `POST /api/export-dxf`：ezdxf 產 R2010 DXF，`$INSUNITS=5`（公分）、
+     WALL/COL/DOOR/WINDOW 分圖層、預留 scale 參數
+   - Ribbon 檔案群「匯出 DXF」按鈕 → 下載 `floorai.dxf`
+   - **Round-trip 驗證通過**：Playwright 匯出下載 → 回傳 `/api/upload-dxf` → 3 牆（厚 15）
+     + 1 柱完整還原；ezdxf 重讀確認圖層/單位正確
+   - **單位正式定為 1 world unit = 1 cm**（牆 15、門 80 的語意）
 
 > ⚠️ **DXF 匯入尚未大量測試** — 目前只用 repo 裡的 `test.dxf` 這一份測試圖驗證過（4 牆 + 5 柱），
 > 還沒拿真實圖面跑過。`pair_walls`/`cluster_columns` 的配對參數（牆厚範圍 8–30、柱群聚距離 50）
@@ -34,10 +46,11 @@
 > 在確認這點之前，不要把 DXF 匯入當成穩定可用的功能。
 
 **下一個（候選，待使用者選）：**
-- DXF 匯入用真實圖面驗證，視結果調整 `pair_walls`/`cluster_columns` 參數
-- 匯出 pipeline（DXF 匯出 / AutoCAD COM 寫回）— 產品核心交付，建議另開新分支，不跟匯入混在一起
-- 把幾何測試正式化進 repo（加 `npm test`）
-- 改既有門窗種類寬度 → 套用到已放置開口（stretch；需 `findOpeningGroup` 重算 ptA/ptB）
+- AutoCAD COM 寫回（pywin32，需使用者 Windows + AutoCAD 實機測試）
+- DXF 匯入/匯出用真實圖面驗證 — 真實圖多為 mm 單位（牆厚 100–300），
+  匯入的 GAP 參數與匯出的 scale 都需要單位/比例處理
+- 資料模型地基：物件穩定 id、專案檔 JSON 儲存/開啟、undo 納入類型表
+- 互動優化：性質面板長度直接輸入、改類型寬度套用到已放置開口、框選
 
 **先前完成：** DXF 匯入（後端 ezdxf 牆/柱還原，已 merge）、無限畫布 pan/zoom、牆端點拖拉、
 牆/柱種類系統、Ctrl+Z/Y 復原
@@ -98,14 +111,20 @@
 
 | 層級 | 技術 | 狀態 |
 |------|------|------|
-| 前端 | React（`src/App.js` 單檔） | 原型完成 |
-| 後端 | Python + Flask（`backend/`） | DXF 匯入完成 |
-| DXF 解析 | ezdxf | 牆/柱還原完成 |
+| 前端 | React（`src/App.js` + `src/geometry.js`） | 原型完成 |
+| 幾何模組 | `src/geometry.js`（純函式，含 `npm test`） | 完成 |
+| 後端 | Python + Flask（`backend/`） | DXF 匯入/匯出完成 |
+| DXF 解析 | ezdxf | 牆/柱還原 + 匯出完成 |
 | CAD 整合 | pywin32 COM API | 可跑通，穩定性待強化 |
-| AI | Anthropic API (claude-sonnet) | 待整合 |
+| AI | Anthropic API (claude-sonnet) | 待整合（PR #5 需 rebase） |
+
+**單位約定：1 world unit = 1 cm**（牆厚 15、門寬 80 皆公分語意）；DXF 匯出 `$INSUNITS=5`。
 
 ### 後端架構（`backend/`）
-- `app.py`：Flask，`POST /api/upload-dxf` 接收 DXF，回傳 `{ walls, columns, raw_count, wall_count, col_count }`
+- `app.py`：Flask
+  - `POST /api/upload-dxf`：接收 DXF，回傳 `{ walls, columns, raw_count, wall_count, col_count }`
+  - `POST /api/export-dxf`：收 `{lines, arcs, scale?}` → ezdxf 產 R2010 DXF
+    （`$INSUNITS=5`、WALL/COL/DOOR/WINDOW 分圖層）→ 回傳檔案下載
 - `dxf_parser.py`：
   - `parse_dxf(path)`：主流程，LINE/LWPOLYLINE → segments，配對牆 + 分群柱
   - `pair_walls(segments)`：貪婪配對平行線段 → 牆 `{start:[x,y], end:[x,y], thickness}`，回傳 `(walls, leftover)`
@@ -117,7 +136,11 @@
 
 ---
 
-## 四、前端架構（`src/App.js`）
+## 四、前端架構（`src/App.js` + `src/geometry.js`）
+
+> 純幾何函式（接合計算、匯出組裝）都在 `src/geometry.js`，與 React 無關，
+> `npm test` 直接對它斷言；App.js 只剩元件、狀態與互動。下表函式除 UI handler 外多屬 geometry.js，
+> 完整行號對照見 `docs/code-index.md`。
 
 ### 資料結構
 - `rawWalls`：所有物件的唯一資料來源（牆段 / 門 / 窗）
@@ -220,7 +243,7 @@ worldToScreen(wx, wy) → { x: wx*scale + offsetX, y: svgH - (wy*scale + offsetY
   放置 click 容差」與「拖放 dead-zone」——屬互動容差、非接合幾何，影響小，暫留
 - 改既有門窗種類寬度 → 尚未套用到「已放置」的開口（需 `findOpeningGroup` 重算 ptA/ptB）。
   目前只支援「新放置用選定寬度」
-- 幾何測試（`scratchpad/extract_and_test.js`）尚未收進 repo、無 `npm test`
+- AutoCAD COM 寫回未做（匯出到 DXF 檔為止）；undo 快照不含四張類型表
 
 ---
 

@@ -1,11 +1,21 @@
+import io
 import os
 import tempfile
-from flask import Flask, request, jsonify
+import ezdxf
+from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 from dxf_parser import parse_dxf
 
 app = Flask(__name__)
 CORS(app)
+
+# 匯出圖層與 AutoCAD 顏色索引（ACI）
+EXPORT_LAYERS = {
+    "WALL":   3,   # 綠
+    "COL":    1,   # 紅
+    "DOOR":   4,   # 青
+    "WINDOW": 5,   # 藍
+}
 
 
 @app.route("/api/upload-dxf", methods=["POST"])
@@ -36,6 +46,65 @@ def upload_dxf():
         "walls":       result["walls"],
         "columns":     result["columns"],
     })
+
+
+@app.route("/api/export-dxf", methods=["POST"])
+def export_dxf():
+    """收前端組好的線段/弧清單，寫成 DXF 檔回傳下載。
+
+    body: { lines: [{x1,y1,x2,y2,layer}], arcs: [{cx,cy,r,startDeg,endDeg,layer}], scale? }
+    座標語意為公分（$INSUNITS=5）；scale 預留換算用，預設 1。
+    """
+    data = request.get_json(silent=True)
+    if data is None:
+        return jsonify({"error": "invalid json"}), 400
+    lines = data.get("lines", [])
+    arcs = data.get("arcs", [])
+    if not lines and not arcs:
+        return jsonify({"error": "nothing to export"}), 400
+    try:
+        scale = float(data.get("scale", 1))
+    except (TypeError, ValueError):
+        return jsonify({"error": "invalid scale"}), 400
+
+    doc = ezdxf.new("R2010")
+    doc.header["$INSUNITS"] = 5  # centimeters
+    for name, color in EXPORT_LAYERS.items():
+        doc.layers.add(name, color=color)
+    msp = doc.modelspace()
+
+    def layer_of(item):
+        name = item.get("layer", "0")
+        return name if name in EXPORT_LAYERS else "0"
+
+    try:
+        for l in lines:
+            msp.add_line(
+                (l["x1"] * scale, l["y1"] * scale),
+                (l["x2"] * scale, l["y2"] * scale),
+                dxfattribs={"layer": layer_of(l)},
+            )
+        for a in arcs:
+            msp.add_arc(
+                center=(a["cx"] * scale, a["cy"] * scale),
+                radius=a["r"] * scale,
+                start_angle=a["startDeg"],
+                end_angle=a["endDeg"],
+                dxfattribs={"layer": layer_of(a)},
+            )
+    except (KeyError, TypeError) as e:
+        return jsonify({"error": f"malformed geometry: {e}"}), 400
+
+    buf = io.StringIO()
+    doc.write(buf)
+    payload = io.BytesIO(buf.getvalue().encode("utf-8"))
+    payload.seek(0)
+    return send_file(
+        payload,
+        as_attachment=True,
+        download_name="floorai.dxf",
+        mimetype="application/dxf",
+    )
 
 
 if __name__ == "__main__":
