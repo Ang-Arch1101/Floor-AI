@@ -158,8 +158,18 @@ def cluster_columns(segments, cluster_gap=CLUSTER_GAP, max_col=MAX_COL):
 
 # ── 主流程 ──────────────────────────────────────────────────────────────────────
 
+# 這些圖層上的線是「開口裝飾」（門框/門弧/窗框/玻璃線），不是牆或柱。
+# FloorAI 自己匯出的檔會用這些圖層名；跳過它們，避免窗框被誤判成柱（幻影柱）。
+# 一般 CAD 圖面沒有這些圖層名 → 不受影響，維持純幾何辨識。
+OPENING_LAYERS = {"DOOR", "WINDOW"}
+
+
 def parse_dxf(file_path):
-    """讀入 DXF：平行線配對還原牆，碎片分群還原柱。"""
+    """讀入 DXF：平行線配對還原牆，碎片分群還原柱。
+
+    DOOR/WINDOW 圖層（FloorAI 匯出的開口裝飾）不參與牆/柱辨識，
+    避免 round-trip 時窗框被 cluster_columns 誤判成柱。
+    """
     doc = ezdxf.readfile(file_path)
     msp = doc.modelspace()
 
@@ -167,6 +177,8 @@ def parse_dxf(file_path):
     columns = []
 
     for entity in msp:
+        if entity.dxf.layer in OPENING_LAYERS:
+            continue
         if entity.dxftype() == "LINE":
             s = entity.dxf.start
             e = entity.dxf.end

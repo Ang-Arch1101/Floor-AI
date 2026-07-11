@@ -34,11 +34,17 @@
    - `buildExportGeometry()`：收集「畫面上實際渲染的幾何」（miter/T 裁切/十字缺口/柱裁切
      都反映在線段上）→ `{lines, arcs}`
    - 後端 `POST /api/export-dxf`：ezdxf 產 R2010 DXF，`$INSUNITS=5`（公分）、
-     WALL/COL/DOOR/WINDOW 分圖層、預留 scale 參數
+     WALL/DOOR/WINDOW 分圖層、預留 scale 參數
    - Ribbon 檔案群「匯出 DXF」按鈕 → 下載 `floorai.dxf`
    - **Round-trip 驗證通過**：Playwright 匯出下載 → 回傳 `/api/upload-dxf` → 3 牆（厚 15）
      + 1 柱完整還原；ezdxf 重讀確認圖層/單位正確
    - **單位正式定為 1 world unit = 1 cm**（牆 15、門 80 的語意）
+9. **匯出/round-trip 修正（PR #7 回饋）**：
+   - 門弧改 `DASHED` 線型（先前匯出成實線）
+   - RC 柱併入 `WALL` 圖層（`LAYER_REMAP`，先前在獨立 COL 層）
+   - **幻影柱修正**：parser 改看圖層，跳過 `DOOR`/`WINDOW`（`OPENING_LAYERS`）——先前 re-import
+     時窗框（牆厚×窗寬的小方框）會被 `cluster_columns` 誤判成柱，一個窗多一根幻影柱
+   - 驗證：Flask test client 端到端確認門弧 DASHED、柱在 WALL 層；round-trip 4 角柱無幻影
 
 > ⚠️ **DXF 匯入尚未大量測試** — 目前只用 repo 裡的 `test.dxf` 這一份測試圖驗證過（4 牆 + 5 柱），
 > 還沒拿真實圖面跑過。`pair_walls`/`cluster_columns` 的配對參數（牆厚範圍 8–30、柱群聚距離 50）
@@ -123,10 +129,13 @@
 ### 後端架構（`backend/`）
 - `app.py`：Flask
   - `POST /api/upload-dxf`：接收 DXF，回傳 `{ walls, columns, raw_count, wall_count, col_count }`
-  - `POST /api/export-dxf`：收 `{lines, arcs, scale?}` → ezdxf 產 R2010 DXF
-    （`$INSUNITS=5`、WALL/COL/DOOR/WINDOW 分圖層）→ 回傳檔案下載
+  - `POST /api/export-dxf`：收 `{lines, arcs, scale?}` → ezdxf 產 R2010 DXF → 回傳檔案下載
+    - 圖層：`WALL`（牆 + RC 柱同層，`LAYER_REMAP` 把 COL 併進 WALL）、`DOOR`、`WINDOW`
+    - 門弧用 `DASHED` 線型（對齊畫面虛線）；`$INSUNITS=5`
 - `dxf_parser.py`：
   - `parse_dxf(path)`：主流程，LINE/LWPOLYLINE → segments，配對牆 + 分群柱
+    - `DOOR`/`WINDOW` 圖層（`OPENING_LAYERS`）的線**不參與**牆/柱辨識——避免 round-trip 時
+      窗框被誤判成柱（幻影柱）。一般 CAD 圖沒這些圖層名，不受影響
   - `pair_walls(segments)`：貪婪配對平行線段 → 牆 `{start:[x,y], end:[x,y], thickness}`，回傳 `(walls, leftover)`
   - `try_pair(a, b, ...)`：兩線段平行 + 間距∈[8,30] + 重疊≥50 → 一道牆（中心線 + 量到的厚度）
   - `cluster_columns(segments)`：union-find 依端點鄰近（<50）分群 → bounding box → 柱 `{cx,cy,w,h,angle}`
@@ -243,6 +252,11 @@ worldToScreen(wx, wy) → { x: wx*scale + offsetX, y: svgH - (wy*scale + offsetY
   放置 click 容差」與「拖放 dead-zone」——屬互動容差、非接合幾何，影響小，暫留
 - 改既有門窗種類寬度 → 尚未套用到「已放置」的開口（需 `findOpeningGroup` 重算 ptA/ptB）。
   目前只支援「新放置用選定寬度」
+- **匯出檔 re-import 時，門窗不會還原成開口**（parser 跳過 DOOR/WINDOW 圖層，只還原牆+柱）。
+  要把開口還原回來屬「寄宿式資料模型」重構的範圍，暫緩。實際工作流是讀真實圖→改→匯出，
+  少會 re-import 自己的匯出，影響小
+- **牆被開口切成獨立段**：放門窗會把一道牆 splice 成「左段+開口+右段」三個物件（切割式模型），
+  牆非單一實體、匯出時開口處牆面線歸在開口圖層。改成寄宿式（牆保持一體）是待決定的大重構
 - AutoCAD COM 寫回未做（匯出到 DXF 檔為止）；undo 快照不含四張類型表
 
 ---

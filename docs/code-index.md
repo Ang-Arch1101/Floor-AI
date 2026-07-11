@@ -10,14 +10,17 @@
 
 ## 後端（`backend/`）
 
-### `backend/app.py`（111 行）
+### `backend/app.py`（116 行）
 | 內容 | 行號 | 說明 |
 |------|------|------|
-| `EXPORT_LAYERS` | L13 | 匯出圖層與 ACI 顏色：WALL/COL/DOOR/WINDOW |
-| `POST /api/upload-dxf` | L22 | 接收 `.dxf` 檔，呼叫 `parse_dxf`，回傳 `{walls, columns, ...}` |
-| `POST /api/export-dxf` | L52 | 收 `{lines, arcs, scale?}` → ezdxf R2010、`$INSUNITS=5`、分圖層寫 LINE/ARC → 回傳檔案下載 |
+| `EXPORT_LAYERS` | L13 | 匯出圖層與 ACI 顏色：WALL/DOOR/WINDOW |
+| `LAYER_REMAP` | L19 | `{COL: WALL}` — RC 柱併入 WALL 圖層 |
+| `POST /api/upload-dxf` | L23 | 接收 `.dxf` 檔，呼叫 `parse_dxf`，回傳 `{walls, columns, ...}` |
+| `POST /api/export-dxf` | L53 | 收 `{lines, arcs, scale?}` → ezdxf R2010、`$INSUNITS=5`、分圖層寫 LINE/ARC → 回傳檔案下載 |
+| `DASHED` 線型（L76）+ 門弧套用（L98） | | 門弧匯出成虛線，對齊畫面 `strokeDasharray` |
+| `layer_of`（L80）| | 套 `LAYER_REMAP` 後決定實體圖層 |
 
-### `backend/dxf_parser.py`（197 行）
+### `backend/dxf_parser.py`（209 行）
 | 名稱 | 行號 | 說明 |
 |------|------|------|
 | 參數常數 `GAP_MIN/GAP_MAX/OVERLAP_MIN/CLUSTER_GAP/MAX_COL/PARALLEL_TOL` | L5–10 | 牆厚範圍、重疊下限、柱群聚距離、容差，都是針對 `test.dxf` 調的 |
@@ -25,7 +28,8 @@
 | `try_pair(a, b, ...)` | L39 | 兩線段平行 + 間距 8–30 + 重疊 ≥50 → 配成一道牆（中心線 + 量到的厚度） |
 | `pair_walls(segments)` | L84 | 貪婪配對平行線段成牆，回傳 `(walls, leftover)` |
 | `cluster_columns(segments, ...)` | L107 | union-find 依端點鄰近（<50）把零散線段分群 → bounding box 當柱 |
-| `parse_dxf(file_path)` | L161 | 主流程：ezdxf 讀 LINE/LWPOLYLINE → segments，配對成牆 + 分群成柱 |
+| `OPENING_LAYERS` | L164 | `{DOOR, WINDOW}` — 這些圖層的線跳過牆/柱辨識（防幻影柱） |
+| `parse_dxf(file_path)` | L167 | 主流程：ezdxf 讀 LINE/LWPOLYLINE（跳過開口圖層）→ 配對牆 + 分群柱 |
 
 - 測試檔：根目錄 `test.dxf`（4 牆 + 5 柱）
 - 依賴：`flask`、`flask-cors`、`ezdxf`（`pip install flask flask-cors ezdxf`，`python app.py` 監聽 :5000）
@@ -163,6 +167,9 @@ SVG `<g transform>`: `matrix(scale, 0, 0, -scale, offsetX, svgH - offsetY)`
 - DXF 解析只處理 LINE / LWPOLYLINE；真實圖面的 mm 單位（牆厚 100–300）會讓 GAP 參數失效，
   需要單位/比例處理
 - AutoCAD COM 寫回未做（匯出目前到 DXF 檔為止）
+- **匯出檔 re-import 時門窗不還原成開口**（parser 跳過 DOOR/WINDOW 圖層，只還原牆+柱）；
+  開口還原屬「寄宿式資料模型」重構範圍，暫緩
+- **牆被開口切成獨立段**（切割式模型）：放門窗把牆 splice 成三段，牆非單一實體
 - per-wall thickness 已完成；仍用全域 `THICKNESS` 的只剩開口放置 click 容差與拖放 dead-zone
 - 改類型寬度不套用到已放置的開口；已放置開口不能換類型
 - 斜牆不支援（正交鎖定）

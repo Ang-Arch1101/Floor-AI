@@ -11,11 +11,12 @@ CORS(app)
 
 # 匯出圖層與 AutoCAD 顏色索引（ACI）
 EXPORT_LAYERS = {
-    "WALL":   3,   # 綠
-    "COL":    1,   # 紅
+    "WALL":   3,   # 綠（牆 + RC 柱同圖層）
     "DOOR":   4,   # 青
     "WINDOW": 5,   # 藍
 }
+# RC 柱與牆歸同一圖層（結構元件慣例）：把 buildExportGeometry 標的 COL 併進 WALL
+LAYER_REMAP = {"COL": "WALL"}
 
 
 @app.route("/api/upload-dxf", methods=["POST"])
@@ -71,10 +72,14 @@ def export_dxf():
     doc.header["$INSUNITS"] = 5  # centimeters
     for name, color in EXPORT_LAYERS.items():
         doc.layers.add(name, color=color)
+    # 門弧用虛線（對齊畫面上的 strokeDasharray）；4cm 實線、3cm 間隔
+    if "DASHED" not in doc.linetypes:
+        doc.linetypes.add("DASHED", pattern=[7.0, 4.0, -3.0], description="__ __ __")
     msp = doc.modelspace()
 
     def layer_of(item):
         name = item.get("layer", "0")
+        name = LAYER_REMAP.get(name, name)
         return name if name in EXPORT_LAYERS else "0"
 
     try:
@@ -90,7 +95,7 @@ def export_dxf():
                 radius=a["r"] * scale,
                 start_angle=a["startDeg"],
                 end_angle=a["endDeg"],
-                dxfattribs={"layer": layer_of(a)},
+                dxfattribs={"layer": layer_of(a), "linetype": "DASHED"},
             )
     except (KeyError, TypeError) as e:
         return jsonify({"error": f"malformed geometry: {e}"}), 400
