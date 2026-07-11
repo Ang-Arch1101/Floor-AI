@@ -44,7 +44,9 @@
    - RC 柱併入 `WALL` 圖層（`LAYER_REMAP`，先前在獨立 COL 層）
    - **幻影柱修正**：parser 改看圖層，跳過 `DOOR`/`WINDOW`（`OPENING_LAYERS`）——先前 re-import
      時窗框（牆厚×窗寬的小方框）會被 `cluster_columns` 誤判成柱，一個窗多一根幻影柱
-   - 驗證：Flask test client 端到端確認門弧 DASHED、柱在 WALL 層；round-trip 4 角柱無幻影
+   - 驗證：Flask test client 端到端確認門弧 DASHED、柱在 WALL 層；5 場景 round-trip（無開口/
+     多窗/多門/門窗同牆/大小柱混合）柱數全對；瀏覽器全鏈路 E2E（匯出下載→回傳匯入）4 柱無幻影
+   - 回歸測試進 repo：`backend/test_parser.py`（幻影柱 + test.dxf 正常匯入）
 
 > ⚠️ **DXF 匯入尚未大量測試** — 目前只用 repo 裡的 `test.dxf` 這一份測試圖驗證過（4 牆 + 5 柱），
 > 還沒拿真實圖面跑過。`pair_walls`/`cluster_columns` 的配對參數（牆厚範圍 8–30、柱群聚距離 50）

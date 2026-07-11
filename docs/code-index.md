@@ -32,6 +32,8 @@
 | `parse_dxf(file_path)` | L167 | 主流程：ezdxf 讀 LINE/LWPOLYLINE（跳過開口圖層）→ 配對牆 + 分群柱 |
 
 - 測試檔：根目錄 `test.dxf`（4 牆 + 5 柱）
+- 回歸測試：`backend/test_parser.py`（獨立 assert 腳本，`python test_parser.py`）——
+  幻影柱修正（窗框不被誤判成柱）+ test.dxf 正常匯入
 - 依賴：`flask`、`flask-cors`、`ezdxf`（`pip install flask flask-cors ezdxf`，`python app.py` 監聽 :5000）
 
 ---
