@@ -78,9 +78,13 @@ def export_dxf():
     msp = doc.modelspace()
 
     def layer_of(item):
-        name = item.get("layer", "0")
+        # 匯入物件帶著來源圖層 → 原樣輸出（依需要建出來）；
+        # FloorAI 新畫的物件用預設圖層（COL 併進 WALL）。
+        name = item.get("layer") or "0"
         name = LAYER_REMAP.get(name, name)
-        return name if name in EXPORT_LAYERS else "0"
+        if name not in doc.layers:
+            doc.layers.add(name, color=EXPORT_LAYERS.get(name, 7))  # 來源圖層預設白(7)
+        return name
 
     try:
         for l in lines:

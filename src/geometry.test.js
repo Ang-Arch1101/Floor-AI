@@ -136,4 +136,15 @@ describe('DXF 匯出組裝（buildExportGeometry）', () => {
     const { lines } = buildExportGeometry([], [col]);
     expect(lines.filter(l => l.layer === 'COL')).toHaveLength(16);
   });
+
+  test('物件帶 layer → 匯出用該圖層；沒帶 → 用預設', () => {
+    const imported = { ...wall(0, 0, 200, 0), layer: 'A-WALL' };  // 匯入的牆
+    const drawn = wall(0, 100, 200, 100);                          // FloorAI 新畫（無 layer）
+    const importedCol = { cx: 100, cy: 300, type: 'rc', rotated: false, w: 40, h: 40, layer: 'A-COL' };
+    const { lines } = buildExportGeometry([imported, drawn], [importedCol]);
+    expect(lines.some(l => l.layer === 'A-WALL')).toBe(true);   // 匯入牆放回來源層
+    expect(lines.some(l => l.layer === 'WALL')).toBe(true);     // 新畫牆用預設
+    expect(lines.some(l => l.layer === 'A-COL')).toBe(true);    // 匯入柱放回來源層
+    expect(lines.every(l => l.layer !== 'COL')).toBe(true);     // 這批柱都有來源層，不會是預設 COL
+  });
 });

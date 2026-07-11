@@ -47,6 +47,13 @@
    - 驗證：Flask test client 端到端確認門弧 DASHED、柱在 WALL 層；5 場景 round-trip（無開口/
      多窗/多門/門窗同牆/大小柱混合）柱數全對；瀏覽器全鏈路 E2E（匯出下載→回傳匯入）4 柱無幻影
    - 回歸測試進 repo：`backend/test_parser.py`（幻影柱 + test.dxf 正常匯入）
+10. **圖層保留（匯入來源層→匯出同層）**：
+    - parser 記每道牆/柱的**來源 DXF 圖層**（`try_pair` 取線段 a 的層、`cluster_columns` 取群內最多數層）
+    - 前端匯入的 rawWalls/columns 帶 `layer` 欄；`placeOpening`/`mergeOpening`/刪除合併都保留
+    - `buildExportGeometry` 用物件的 `layer`（沒有的—FloorAI 新畫—用預設 WALL/COL/DOOR/WINDOW）
+    - 後端匯出**依需要建圖層**：來源層（如 `A-WALL`）原樣輸出、預設白色；FloorAI 預設層配 ACI 色
+    - 驗證：`test_source_layer_preserved`（牆記 A-WALL、柱記 A-COL）+ 完整 round-trip（A-WALL/A-COL/
+      WALL 混合匯出→再匯入圖層全保留）
 
 > ⚠️ **DXF 匯入尚未大量測試** — 目前只用 repo 裡的 `test.dxf` 這一份測試圖驗證過（4 牆 + 5 柱），
 > 還沒拿真實圖面跑過。`pair_walls`/`cluster_columns` 的配對參數（牆厚範圍 8–30、柱群聚距離 50）
@@ -154,8 +161,9 @@
 > 完整行號對照見 `docs/code-index.md`。
 
 ### 資料結構
+> 匯入的物件多帶一個 `layer`（來源 DXF 圖層），匯出時放回同一圖層；FloorAI 新畫的物件無 `layer`，用預設層。
 - `rawWalls`：所有物件的唯一資料來源（牆段 / 門 / 窗）
-  - 牆段：`{ start: {x,y}, end: {x,y}, typeId, thickness }`
+  - 牆段：`{ start: {x,y}, end: {x,y}, typeId, thickness, layer? }`
   - 門：`{ isDoor: true, ptA, ptB, nx, ny, ux, uy, flipped, width, typeId, thickness }`
     - `typeId`→`doorTypes`（門寬）；`thickness`=宿主牆厚（只給 jamb 渲染用）；`width`=開口跨距
   - 窗：`{ isWindow: true, ptA, ptB, nx, ny, ux, uy, width, typeId, thickness }`（`typeId`→`windowTypes`）

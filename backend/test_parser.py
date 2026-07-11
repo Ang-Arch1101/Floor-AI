@@ -49,6 +49,32 @@ def test_phantom_column_excluded():
     print("[OK] test_phantom_column_excluded：窗框未被誤判成柱（1 牆 1 柱）")
 
 
+def test_source_layer_preserved():
+    """匯入時牆/柱記住來源 DXF 圖層（供匯出放回同一圖層）。"""
+    doc = ezdxf.new("R2010")
+    doc.layers.add("A-WALL")
+    doc.layers.add("A-COL")
+    msp = doc.modelspace()
+    # 一道牆（兩條平行線）在 A-WALL 層
+    msp.add_line((0, 0), (200, 0), dxfattribs={"layer": "A-WALL"})
+    msp.add_line((0, 15), (200, 15), dxfattribs={"layer": "A-WALL"})
+    # 一根柱在 A-COL 層
+    _box(msp, 100, 100, 30, 30, "A-COL")
+
+    with tempfile.NamedTemporaryFile(suffix=".dxf", delete=False) as tmp:
+        path = tmp.name
+    doc.saveas(path)
+    try:
+        res = parse_dxf(path)
+    finally:
+        os.unlink(path)
+
+    assert res["wall_count"] == 1 and res["col_count"] == 1, res
+    assert res["walls"][0]["layer"] == "A-WALL", f"牆圖層={res['walls'][0].get('layer')}"
+    assert res["columns"][0]["layer"] == "A-COL", f"柱圖層={res['columns'][0].get('layer')}"
+    print("[OK] test_source_layer_preserved：牆記 A-WALL、柱記 A-COL")
+
+
 def test_normal_import_unaffected():
     """test.dxf（無 DOOR/WINDOW 圖層）仍還原 4 牆 + 5 柱。"""
     test_dxf = os.path.join(os.path.dirname(__file__), "..", "test.dxf")
@@ -63,5 +89,6 @@ def test_normal_import_unaffected():
 
 if __name__ == "__main__":
     test_phantom_column_excluded()
+    test_source_layer_preserved()
     test_normal_import_unaffected()
     print("=== 全部通過 ===")

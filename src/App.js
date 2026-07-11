@@ -480,7 +480,7 @@ export default function App() {
         if (obj.isDoor || obj.isWindow) {
           const left = next[idx - 1], right = next[idx + 1];
           if (left && right && !left.isDoor && !left.isWindow && !right.isDoor && !right.isWindow) {
-            next.splice(idx - 1, 3, { start: left.start, end: right.end, typeId: left.typeId, thickness: left.thickness });
+            next.splice(idx - 1, 3, { start: left.start, end: right.end, typeId: left.typeId, thickness: left.thickness, layer: left.layer });
           }
         } else {
           next = next.filter((_, i) => i !== idx);
@@ -1157,11 +1157,13 @@ if (mode !== 'wall') setSnapIndicator(null);
                 const walls = data.walls ?? [];
                 const cols = data.columns ?? [];
                 // 直接使用 DXF 原始座標（DXF 的 0,0 對齊世界原點十字）
+                // layer：記住來源 DXF 圖層，匯出時放回同一圖層（在 FloorAI 新畫的物件沒有 layer，用預設）
                 const newWalls = walls.map(w => ({
                   start: { x: w.start[0], y: w.start[1] },
                   end:   { x: w.end[0],   y: w.end[1] },
                   typeId: wallTypes[0]?.id,
                   thickness: w.thickness ?? wallTypes[0]?.thickness ?? THICKNESS,
+                  layer: w.layer,
                 }));
                 const newCols = cols.map(c => ({
                   cx: c.cx,
@@ -1171,6 +1173,7 @@ if (mode !== 'wall') setSnapIndicator(null);
                   typeId: colTypes[0]?.id,
                   w: c.w,
                   h: c.h,
+                  layer: c.layer,
                 }));
                 console.log(`DXF 匯入：${newWalls.length} 條牆、${newCols.length} 根柱`);
                 saveHistory();

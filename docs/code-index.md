@@ -30,10 +30,11 @@
 | `cluster_columns(segments, ...)` | L107 | union-find 依端點鄰近（<50）把零散線段分群 → bounding box 當柱 |
 | `OPENING_LAYERS` | L164 | `{DOOR, WINDOW}` — 這些圖層的線跳過牆/柱辨識（防幻影柱） |
 | `parse_dxf(file_path)` | L167 | 主流程：ezdxf 讀 LINE/LWPOLYLINE（跳過開口圖層）→ 配對牆 + 分群柱 |
+| 來源圖層追蹤 | | 每 segment 記 `layer`；`try_pair` 取 a 的層、`cluster_columns` 取群內最多數層 → 牆/柱帶 `layer` |
 
 - 測試檔：根目錄 `test.dxf`（4 牆 + 5 柱）
 - 回歸測試：`backend/test_parser.py`（獨立 assert 腳本，`python test_parser.py`）——
-  幻影柱修正（窗框不被誤判成柱）+ test.dxf 正常匯入
+  幻影柱修正（窗框不被誤判成柱）+ 來源圖層保留（牆記 A-WALL、柱記 A-COL）+ test.dxf 正常匯入
 - 依賴：`flask`、`flask-cors`、`ezdxf`（`pip install flask flask-cors ezdxf`，`python app.py` 監聽 :5000）
 
 ---
@@ -85,7 +86,7 @@ App.js 渲染管線與 DXF 匯出共用；`npm test` 直接對這裡斷言（`sr
 | `doorExportGeometry(door)` | L696 | 對應 DoorSegment：2 門框線 + 門扇線 + 90° 開門弧（DXF ARC 逆時針） |
 | `windowExportLines(win)` | L720 | 對應 WindowSegment：6 框線 + 2 玻璃線 |
 | `columnExportLines(col, rawWalls)` | L738 | RC 柱四邊含缺口；H 柱外框+翼板+腹板 16 線 |
-| `buildExportGeometry(rawWalls, columns)` | L767 | 主入口：整場景 → `{lines:[{x1,y1,x2,y2,layer}], arcs:[...]}` |
+| `buildExportGeometry(rawWalls, columns)` | L767 | 主入口：整場景 → `{lines:[{x1,y1,x2,y2,layer}], arcs:[...]}`；每物件用自己的 `layer`（無則預設 WALL/COL/DOOR/WINDOW） |
 
 ---
 

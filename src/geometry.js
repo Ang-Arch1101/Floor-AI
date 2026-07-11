@@ -109,8 +109,8 @@ function placeOpening(walls, wallIdx, clickPt, type, flipped = false, openingTyp
     ux: n.dx / n.len, uy: n.dy / n.len, flipped,
     width: WIDTH, typeId: openingType?.id, thickness: wall.thickness,
   };
-  // Flanking segments keep the host wall's own type/thickness.
-  const carrier = { typeId: wall.typeId, thickness: wall.thickness };
+  // Flanking segments keep the host wall's own type/thickness + source layer.
+  const carrier = { typeId: wall.typeId, thickness: wall.thickness, layer: wall.layer };
   const next = [...walls];
   next.splice(wallIdx, 1,
     { start: wall.start, end: ptA, ...carrier },
@@ -127,7 +127,7 @@ function findOpeningGroup(walls, idx) {
 
 function mergeOpening(walls, group) {
   const left = walls[group.leftIdx];
-  const merged = { start: left.start, end: walls[group.rightIdx].end, typeId: left.typeId, thickness: left.thickness };
+  const merged = { start: left.start, end: walls[group.rightIdx].end, typeId: left.typeId, thickness: left.thickness, layer: left.layer };
   const next = [...walls];
   next.splice(group.leftIdx, 3, merged);
   return next;
@@ -764,6 +764,8 @@ function columnExportLines(col, rawWalls) {
 }
 
 // 主入口：整個場景 → { lines: [{x1,y1,x2,y2,layer}], arcs: [{cx,cy,r,startDeg,endDeg,layer}] }
+// 每個物件用自己的來源圖層（匯入時記下的 `layer`）；沒有的（FloorAI 新畫）用預設圖層。
+// 後端 app.py 會把預設的 COL 併進 WALL，並依需要建出來源圖層。
 function buildExportGeometry(rawWalls, columns) {
   const lines = [];
   const arcs = [];
@@ -772,15 +774,16 @@ function buildExportGeometry(rawWalls, columns) {
   rawWalls.forEach((w, i) => {
     if (w.isDoor) {
       const g = doorExportGeometry(w);
-      tag(g.lines, 'DOOR');
-      g.arcs.forEach(a => arcs.push({ ...a, layer: 'DOOR' }));
+      const layer = w.layer ?? 'DOOR';
+      tag(g.lines, layer);
+      g.arcs.forEach(a => arcs.push({ ...a, layer }));
     } else if (w.isWindow) {
-      tag(windowExportLines(w), 'WINDOW');
+      tag(windowExportLines(w), w.layer ?? 'WINDOW');
     } else {
-      tag(wallExportLines(w, rawWalls, columns, miters[i] || {}), 'WALL');
+      tag(wallExportLines(w, rawWalls, columns, miters[i] || {}), w.layer ?? 'WALL');
     }
   });
-  columns.forEach(c => tag(columnExportLines(c, rawWalls), 'COL'));
+  columns.forEach(c => tag(columnExportLines(c, rawWalls), c.layer ?? 'COL'));
   return { lines, arcs };
 }
 
