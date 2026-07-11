@@ -46,6 +46,7 @@ def upload_dxf():
         "col_count":   result["col_count"],
         "walls":       result["walls"],
         "columns":     result["columns"],
+        "layers":      result["layers"],
     })
 
 
@@ -53,8 +54,9 @@ def upload_dxf():
 def export_dxf():
     """收前端組好的線段/弧清單，寫成 DXF 檔回傳下載。
 
-    body: { lines: [{x1,y1,x2,y2,layer}], arcs: [{cx,cy,r,startDeg,endDeg,layer}], scale? }
+    body: { lines: [...], arcs: [...], scale?, layers?: [{name,color,linetype,lineweight}] }
     座標語意為公分（$INSUNITS=5）；scale 預留換算用，預設 1。
+    layers：匯入來源圖層的外觀設定，匯出時放回同樣的顏色/線型/線寬。
     """
     data = request.get_json(silent=True)
     if data is None:
@@ -67,23 +69,39 @@ def export_dxf():
         scale = float(data.get("scale", 1))
     except (TypeError, ValueError):
         return jsonify({"error": "invalid scale"}), 400
+    # 來源圖層外觀查表：name → {color, linetype, lineweight}
+    src_layers = {L["name"]: L for L in data.get("layers", []) if L.get("name")}
 
-    doc = ezdxf.new("R2010")
+    # setup=True 載入標準線型（CONTINUOUS/DASHED/HIDDEN…），來源圖層引用的標準線型才能還原
+    doc = ezdxf.new("R2010", setup=True)
     doc.header["$INSUNITS"] = 5  # centimeters
+    if "DASHED" not in doc.linetypes:  # 保險：門弧用
+        doc.linetypes.add("DASHED", pattern=[7.0, 4.0, -3.0], description="__ __ __")
     for name, color in EXPORT_LAYERS.items():
         doc.layers.add(name, color=color)
-    # 門弧用虛線（對齊畫面上的 strokeDasharray）；4cm 實線、3cm 間隔
-    if "DASHED" not in doc.linetypes:
-        doc.linetypes.add("DASHED", pattern=[7.0, 4.0, -3.0], description="__ __ __")
     msp = doc.modelspace()
 
+    def ensure_layer(name):
+        if name in doc.layers:
+            return
+        src = src_layers.get(name)
+        if src:
+            # 來源圖層：放回原顏色/線型/線寬（線型不存在就退回 CONTINUOUS）
+            lt = src.get("linetype", "CONTINUOUS")
+            if lt not in doc.linetypes:
+                lt = "CONTINUOUS"
+            lyr = doc.layers.add(name, color=src.get("color", 7), linetype=lt)
+            lw = src.get("lineweight", -3)
+            if lw is not None:
+                lyr.dxf.lineweight = lw
+        else:
+            doc.layers.add(name, color=EXPORT_LAYERS.get(name, 7))  # 未知來源 → 白(7)
+
     def layer_of(item):
-        # 匯入物件帶著來源圖層 → 原樣輸出（依需要建出來）；
-        # FloorAI 新畫的物件用預設圖層（COL 併進 WALL）。
+        # 匯入物件帶著來源圖層 → 原樣輸出（含外觀）；FloorAI 新畫的用預設層（COL 併進 WALL）。
         name = item.get("layer") or "0"
         name = LAYER_REMAP.get(name, name)
-        if name not in doc.layers:
-            doc.layers.add(name, color=EXPORT_LAYERS.get(name, 7))  # 來源圖層預設白(7)
+        ensure_layer(name)
         return name
 
     try:

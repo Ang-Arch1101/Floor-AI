@@ -51,9 +51,16 @@
     - parser 記每道牆/柱的**來源 DXF 圖層**（`try_pair` 取線段 a 的層、`cluster_columns` 取群內最多數層）
     - 前端匯入的 rawWalls/columns 帶 `layer` 欄；`placeOpening`/`mergeOpening`/刪除合併都保留
     - `buildExportGeometry` 用物件的 `layer`（沒有的—FloorAI 新畫—用預設 WALL/COL/DOOR/WINDOW）
-    - 後端匯出**依需要建圖層**：來源層（如 `A-WALL`）原樣輸出、預設白色；FloorAI 預設層配 ACI 色
+    - 後端匯出**依需要建圖層**：來源層（如 `A-WALL`）原樣輸出；FloorAI 預設層配 ACI 色
     - 驗證：`test_source_layer_preserved`（牆記 A-WALL、柱記 A-COL）+ 完整 round-trip（A-WALL/A-COL/
       WALL 混合匯出→再匯入圖層全保留）
+11. **圖層外觀保留（顏色/線型/線寬）**：
+    - parser `read_layer_table(doc)` 讀來源圖層表 `{name,color,linetype,lineweight}`，upload 回傳 `layers`
+    - 前端 `importedLayers` state（localStorage 持久化，依 name 合併）；匯出時放進 payload 的 `layers`
+    - 後端匯出 `ezdxf.new(setup=True)` 載入標準線型，建圖層時套回來源顏色/線型/線寬
+      （非標準線型退回 CONTINUOUS）；門弧 DASHED 保留
+    - 驗證：`test_layer_appearance_captured` + 完整外觀 round-trip（A-WALL 黃/0.25、A-COL 紅/DASHED
+      匯入→匯出全保留，新畫 WALL 用預設綠）
 
 > ⚠️ **DXF 匯入尚未大量測試** — 目前只用 repo 裡的 `test.dxf` 這一份測試圖驗證過（4 牆 + 5 柱），
 > 還沒拿真實圖面跑過。`pair_walls`/`cluster_columns` 的配對參數（牆厚範圍 8–30、柱群聚距離 50）
@@ -174,6 +181,8 @@
 - `doorTypes`：`[{ id, name, width }]`（預設 dt1 單開門 80）
 - `windowTypes`：`[{ id, name, width }]`（預設 nt1 一般窗 80）
   - ⚠️ 開口的 `typeId` 指向 door/window 種類，**與牆段的 `typeId`（指向 wallTypes）是不同命名空間**
+- `importedLayers`：`[{ name, color, linetype, lineweight }]` — 匯入 DXF 的來源圖層外觀，
+  匯出時隨 payload 送回後端放回同樣設定（localStorage 持久化，依 name 合併）
 - `selected`：`[{ type: 'rawWall'|'col', idx }]`
 - `viewTransform`：`{ scale, offsetX, offsetY }`（無限畫布）
 - `history` / `future`：undo/redo 快照堆疊

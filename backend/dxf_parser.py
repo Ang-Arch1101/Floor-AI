@@ -213,4 +213,22 @@ def parse_dxf(file_path):
         "col_count":   len(columns),
         "walls":       walls,
         "columns":     columns,
+        "layers":      read_layer_table(doc),
     }
+
+
+def read_layer_table(doc):
+    """讀來源 DXF 的圖層設定（顏色/線型/線寬），匯出時放回同樣的圖層外觀。
+    回傳 [{name, color, linetype, lineweight}]，跳過系統圖層 0/Defpoints。"""
+    out = []
+    for L in doc.layers:
+        name = L.dxf.name
+        if name in ("0", "Defpoints"):
+            continue
+        out.append({
+            "name":      name,
+            "color":     int(L.dxf.color),
+            "linetype":  L.dxf.linetype,
+            "lineweight": int(L.dxf.get("lineweight", -3)),  # -3 = 預設
+        })
+    return out

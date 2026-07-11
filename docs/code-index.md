@@ -16,7 +16,8 @@
 | `EXPORT_LAYERS` | L13 | 匯出圖層與 ACI 顏色：WALL/DOOR/WINDOW |
 | `LAYER_REMAP` | L19 | `{COL: WALL}` — RC 柱併入 WALL 圖層 |
 | `POST /api/upload-dxf` | L23 | 接收 `.dxf` 檔，呼叫 `parse_dxf`，回傳 `{walls, columns, ...}` |
-| `POST /api/export-dxf` | L53 | 收 `{lines, arcs, scale?}` → ezdxf R2010、`$INSUNITS=5`、分圖層寫 LINE/ARC → 回傳檔案下載 |
+| `POST /api/export-dxf` | L53 | 收 `{lines, arcs, scale?, layers?}` → ezdxf R2010（`setup=True` 載標準線型）、`$INSUNITS=5` → 回傳檔案下載 |
+| `ensure_layer`（export 內） | | 來源圖層套回 `layers` 傳來的顏色/線型/線寬；FloorAI 預設層配 ACI 色 |
 | `DASHED` 線型（L76）+ 門弧套用（L98） | | 門弧匯出成虛線，對齊畫面 `strokeDasharray` |
 | `layer_of`（L80）| | 套 `LAYER_REMAP` 後決定實體圖層 |
 
@@ -31,10 +32,11 @@
 | `OPENING_LAYERS` | L164 | `{DOOR, WINDOW}` — 這些圖層的線跳過牆/柱辨識（防幻影柱） |
 | `parse_dxf(file_path)` | L167 | 主流程：ezdxf 讀 LINE/LWPOLYLINE（跳過開口圖層）→ 配對牆 + 分群柱 |
 | 來源圖層追蹤 | | 每 segment 記 `layer`；`try_pair` 取 a 的層、`cluster_columns` 取群內最多數層 → 牆/柱帶 `layer` |
+| `read_layer_table(doc)` | | 讀來源圖層表 `[{name,color,linetype,lineweight}]`（跳過 0/Defpoints）→ 回傳給前端保留外觀 |
 
 - 測試檔：根目錄 `test.dxf`（4 牆 + 5 柱）
 - 回歸測試：`backend/test_parser.py`（獨立 assert 腳本，`python test_parser.py`）——
-  幻影柱修正（窗框不被誤判成柱）+ 來源圖層保留（牆記 A-WALL、柱記 A-COL）+ test.dxf 正常匯入
+  幻影柱修正 + 來源圖層保留（牆記 A-WALL、柱記 A-COL）+ 圖層外觀讀取（顏色/線型/線寬）+ test.dxf 正常匯入
 - 依賴：`flask`、`flask-cors`、`ezdxf`（`pip install flask flask-cors ezdxf`，`python app.py` 監聽 :5000）
 
 ---

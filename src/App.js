@@ -226,6 +226,10 @@ export default function App() {
   const [viewTransform, setViewTransform] = useState({ scale: 1, offsetX: 0, offsetY: 0 });
   const [panning, setPanning] = useState(null);
   const [endpointDrag, setEndpointDrag] = useState(null);
+  // 匯入 DXF 的來源圖層外觀（name→{color,linetype,lineweight}），匯出時放回同樣設定
+  const [importedLayers, setImportedLayers] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('floorAI_importedLayers') ?? 'null') ?? []; } catch { return []; }
+  });
   const [wallTypes, setWallTypes] = useState(() => {
     try { return JSON.parse(localStorage.getItem('floorAI_wallTypes') ?? 'null') ?? [{ id: 'wt1', name: '一般牆', thickness: 15 }]; } catch { return [{ id: 'wt1', name: '一般牆', thickness: 15 }]; }
   });
@@ -305,7 +309,8 @@ export default function App() {
     localStorage.setItem('floorAI_colTypes', JSON.stringify(colTypes));
     localStorage.setItem('floorAI_doorTypes', JSON.stringify(doorTypes));
     localStorage.setItem('floorAI_windowTypes', JSON.stringify(windowTypes));
-  }, [rawWalls, columns, wallTypes, colTypes, doorTypes, windowTypes]);
+    localStorage.setItem('floorAI_importedLayers', JSON.stringify(importedLayers));
+  }, [rawWalls, columns, wallTypes, colTypes, doorTypes, windowTypes, importedLayers]);
 
   function saveHistory() {
     setHistory(prev => [...prev.slice(-49), { rawWalls, columns }]);
@@ -1179,6 +1184,15 @@ if (mode !== 'wall') setSnapIndicator(null);
                 saveHistory();
                 setRawWalls(prev => [...prev, ...newWalls]);
                 if (newCols.length > 0) setColumns(prev => [...prev, ...newCols]);
+                // 記下來源圖層外觀（依 name 合併，新匯入覆蓋同名）
+                const srcLayers = data.layers ?? [];
+                if (srcLayers.length > 0) {
+                  setImportedLayers(prev => {
+                    const map = new Map(prev.map(L => [L.name, L]));
+                    srcLayers.forEach(L => map.set(L.name, L));
+                    return [...map.values()];
+                  });
+                }
               } catch (err) {
                 console.error('連線失敗（確認後端是否啟動）:', err);
               }
@@ -1187,6 +1201,7 @@ if (mode !== 'wall') setSnapIndicator(null);
           </label>
           <button onClick={async () => {
             const payload = buildExportGeometry(rawWalls, columns);
+            payload.layers = importedLayers;  // 來源圖層外觀，匯出時放回
             if (payload.lines.length === 0 && payload.arcs.length === 0) { window.alert('畫布是空的，沒有可匯出的內容'); return; }
             try {
               const res = await fetch('http://localhost:5000/api/export-dxf', {

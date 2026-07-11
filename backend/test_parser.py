@@ -75,6 +75,31 @@ def test_source_layer_preserved():
     print("[OK] test_source_layer_preserved：牆記 A-WALL、柱記 A-COL")
 
 
+def test_layer_appearance_captured():
+    """匯入時讀出圖層的顏色/線型/線寬（供匯出放回同樣外觀）。"""
+    doc = ezdxf.new("R2010", setup=True)
+    doc.layers.add("A-WALL", color=2, linetype="CONTINUOUS")
+    win = doc.layers.add("A-WIN", color=5, linetype="DASHED")
+    win.dxf.lineweight = 25
+    msp = doc.modelspace()
+    msp.add_line((0, 0), (200, 0), dxfattribs={"layer": "A-WALL"})
+
+    with tempfile.NamedTemporaryFile(suffix=".dxf", delete=False) as tmp:
+        path = tmp.name
+    doc.saveas(path)
+    try:
+        res = parse_dxf(path)
+    finally:
+        os.unlink(path)
+
+    by_name = {L["name"]: L for L in res["layers"]}
+    assert by_name["A-WALL"]["color"] == 2, by_name["A-WALL"]
+    assert by_name["A-WIN"]["color"] == 5, by_name["A-WIN"]
+    assert by_name["A-WIN"]["linetype"] == "DASHED", by_name["A-WIN"]
+    assert by_name["A-WIN"]["lineweight"] == 25, by_name["A-WIN"]
+    print("[OK] test_layer_appearance_captured：讀出 A-WALL 黃、A-WIN 藍/DASHED/0.25")
+
+
 def test_normal_import_unaffected():
     """test.dxf（無 DOOR/WINDOW 圖層）仍還原 4 牆 + 5 柱。"""
     test_dxf = os.path.join(os.path.dirname(__file__), "..", "test.dxf")
@@ -90,5 +115,6 @@ def test_normal_import_unaffected():
 if __name__ == "__main__":
     test_phantom_column_excluded()
     test_source_layer_preserved()
+    test_layer_appearance_captured()
     test_normal_import_unaffected()
     print("=== 全部通過 ===")
