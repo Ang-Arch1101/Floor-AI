@@ -100,6 +100,24 @@ def test_layer_appearance_captured():
     print("[OK] test_layer_appearance_captured：讀出 A-WALL 黃、A-WIN 藍/DASHED/0.25")
 
 
+def test_off_layer_color_normalized():
+    """關閉的圖層 color 存負值 → 讀出時取絕對值（不會讓匯出建圖層時炸掉）。"""
+    doc = ezdxf.new("R2010")
+    lyr = doc.layers.add("A-OFF", color=3)
+    lyr.off()  # 關閉圖層 → color 變 -3
+    doc.modelspace().add_line((0, 0), (100, 0), dxfattribs={"layer": "A-OFF"})
+    with tempfile.NamedTemporaryFile(suffix=".dxf", delete=False) as tmp:
+        path = tmp.name
+    doc.saveas(path)
+    try:
+        res = parse_dxf(path)
+    finally:
+        os.unlink(path)
+    off = next(L for L in res["layers"] if L["name"] == "A-OFF")
+    assert off["color"] == 3, f"關閉圖層顏色應正規化為 3，實際 {off['color']}"
+    print("[OK] test_off_layer_color_normalized：關閉圖層負色正規化為 +3")
+
+
 def test_normal_import_unaffected():
     """test.dxf（無 DOOR/WINDOW 圖層）仍還原 4 牆 + 5 柱。"""
     test_dxf = os.path.join(os.path.dirname(__file__), "..", "test.dxf")
@@ -116,5 +134,6 @@ if __name__ == "__main__":
     test_phantom_column_excluded()
     test_source_layer_preserved()
     test_layer_appearance_captured()
+    test_off_layer_color_normalized()
     test_normal_import_unaffected()
     print("=== 全部通過 ===")

@@ -37,7 +37,7 @@
 - 測試檔：根目錄 `test.dxf`（4 牆 + 5 柱）
 - 回歸測試：`backend/test_parser.py`（獨立 assert 腳本，`python test_parser.py`）——
   幻影柱修正 + 來源圖層保留（牆記 A-WALL、柱記 A-COL）+ 圖層外觀讀取（顏色/線型/線寬）+ test.dxf 正常匯入
-- 依賴：`flask`、`flask-cors`、`ezdxf`（`pip install flask flask-cors ezdxf`，`python app.py` 監聽 :5000）
+- 依賴：`backend/requirements.txt`（`pip install -r requirements.txt`，`python app.py` 監聽 :5000）
 
 ---
 

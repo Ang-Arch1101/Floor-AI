@@ -225,9 +225,13 @@ def read_layer_table(doc):
         name = L.dxf.name
         if name in ("0", "Defpoints"):
             continue
+        # DXF 關閉的圖層 color 存負值 → 取絕對值得真實 ACI；超出 1–255 用預設白(7)
+        color = abs(int(L.dxf.color))
+        if not (1 <= color <= 255):
+            color = 7
         out.append({
             "name":      name,
-            "color":     int(L.dxf.color),
+            "color":     color,
             "linetype":  L.dxf.linetype,
             "lineweight": int(L.dxf.get("lineweight", -3)),  # -3 = 預設
         })
