@@ -31,13 +31,14 @@ def detect_rect_from_lwpoly(entity):
     h = max(edges[0], edges[1])
     cx = sum(p[0] for p in pts) / 4
     cy = sum(p[1] for p in pts) / 4
-    return {"cx": cx, "cy": cy, "w": w, "h": h, "angle": 0.0}
+    return {"cx": cx, "cy": cy, "w": w, "h": h, "angle": 0.0, "layer": entity.dxf.layer}
 
 
 # ── 平行線配對成牆 ──────────────────────────────────────────────────────────────
 
 def try_pair(a, b, gap_min=GAP_MIN, gap_max=GAP_MAX, overlap_min=OVERLAP_MIN):
-    """兩線段若平行、間距合理、重疊夠長，配成一道牆。回傳 {start,end,thickness} 或 None。"""
+    """兩線段若平行、間距合理、重疊夠長，配成一道牆。
+    回傳 {start,end,thickness,layer} 或 None。牆的圖層取線段 a 的來源圖層。"""
     ax, ay = a["start"]; bx, by = a["end"]
     dx, dy = bx - ax, by - ay
     La = math.hypot(dx, dy)
@@ -78,7 +79,7 @@ def try_pair(a, b, gap_min=GAP_MIN, gap_max=GAP_MAX, overlap_min=OVERLAP_MIN):
     oy = ay + ny * (d / 2)
     start = [ox + ux * t0, oy + uy * t0]
     end   = [ox + ux * t1, oy + uy * t1]
-    return {"start": start, "end": end, "thickness": dist}
+    return {"start": start, "end": end, "thickness": dist, "layer": a.get("layer", "0")}
 
 
 def pair_walls(segments):
@@ -140,26 +141,41 @@ def cluster_columns(segments, cluster_gap=CLUSTER_GAP, max_col=MAX_COL):
     for idxs in groups.values():
         xs = []
         ys = []
+        layers = []
         for k in idxs:
             xs += [segments[k]["start"][0], segments[k]["end"][0]]
             ys += [segments[k]["start"][1], segments[k]["end"][1]]
+            layers.append(segments[k].get("layer", "0"))
         w = max(xs) - min(xs)
         h = max(ys) - min(ys)
         if w <= max_col and h <= max_col and w > 1 and h > 1:
+            # 柱的圖層取群內出現最多次的來源圖層
+            layer = max(set(layers), key=layers.count) if layers else "0"
             columns.append({
                 "cx": (min(xs)+max(xs))/2,
                 "cy": (min(ys)+max(ys))/2,
                 "w": w,
                 "h": h,
                 "angle": 0.0,
+                "layer": layer,
             })
     return columns
 
 
 # ── 主流程 ──────────────────────────────────────────────────────────────────────
 
+# 這些圖層上的線是「開口裝飾」（門框/門弧/窗框/玻璃線），不是牆或柱。
+# FloorAI 自己匯出的檔會用這些圖層名；跳過它們，避免窗框被誤判成柱（幻影柱）。
+# 一般 CAD 圖面沒有這些圖層名 → 不受影響，維持純幾何辨識。
+OPENING_LAYERS = {"DOOR", "WINDOW"}
+
+
 def parse_dxf(file_path):
-    """讀入 DXF：平行線配對還原牆，碎片分群還原柱。"""
+    """讀入 DXF：平行線配對還原牆，碎片分群還原柱。
+
+    DOOR/WINDOW 圖層（FloorAI 匯出的開口裝飾）不參與牆/柱辨識，
+    避免 round-trip 時窗框被 cluster_columns 誤判成柱。
+    """
     doc = ezdxf.readfile(file_path)
     msp = doc.modelspace()
 
@@ -167,10 +183,13 @@ def parse_dxf(file_path):
     columns = []
 
     for entity in msp:
+        layer = entity.dxf.layer
+        if layer in OPENING_LAYERS:
+            continue
         if entity.dxftype() == "LINE":
             s = entity.dxf.start
             e = entity.dxf.end
-            segments.append({"start": [s.x, s.y], "end": [e.x, e.y]})
+            segments.append({"start": [s.x, s.y], "end": [e.x, e.y], "layer": layer})
 
         elif entity.dxftype() == "LWPOLYLINE":
             rect = detect_rect_from_lwpoly(entity)
@@ -180,10 +199,10 @@ def parse_dxf(file_path):
             pts = list(entity.get_points())
             for i in range(len(pts) - 1):
                 segments.append({"start": [pts[i][0], pts[i][1]],
-                                 "end":   [pts[i+1][0], pts[i+1][1]]})
+                                 "end":   [pts[i+1][0], pts[i+1][1]], "layer": layer})
             if entity.closed and len(pts) >= 2:
                 segments.append({"start": [pts[-1][0], pts[-1][1]],
-                                 "end":   [pts[0][0], pts[0][1]]})
+                                 "end":   [pts[0][0], pts[0][1]], "layer": layer})
 
     walls, leftover = pair_walls(segments)
     columns += cluster_columns(leftover)
@@ -194,4 +213,26 @@ def parse_dxf(file_path):
         "col_count":   len(columns),
         "walls":       walls,
         "columns":     columns,
+        "layers":      read_layer_table(doc),
     }
+
+
+def read_layer_table(doc):
+    """讀來源 DXF 的圖層設定（顏色/線型/線寬），匯出時放回同樣的圖層外觀。
+    回傳 [{name, color, linetype, lineweight}]，跳過系統圖層 0/Defpoints。"""
+    out = []
+    for L in doc.layers:
+        name = L.dxf.name
+        if name in ("0", "Defpoints"):
+            continue
+        # DXF 關閉的圖層 color 存負值 → 取絕對值得真實 ACI；超出 1–255 用預設白(7)
+        color = abs(int(L.dxf.color))
+        if not (1 <= color <= 255):
+            color = 7
+        out.append({
+            "name":      name,
+            "color":     color,
+            "linetype":  L.dxf.linetype,
+            "lineweight": int(L.dxf.get("lineweight", -3)),  # -3 = 預設
+        })
+    return out

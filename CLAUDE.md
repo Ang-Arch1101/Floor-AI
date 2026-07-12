@@ -1,35 +1,48 @@
 # FloorAI 專案快照
-> 討論時間：2026 年 6 月｜用途：帶入新對話視窗的上下文參考
+> 更新：2026-07｜用途：帶入新對話視窗的上下文參考
 
 ---
 
-## 目前進度（2026-06）
+## 目前進度（2026-07）
 
-**剛完成（本次 session）：**
-1. **接合幾何全面 per-wall thickness** — 牆-牆、牆-柱、門窗開口的接合不再寫死 `THICKNESS/2`，
-   各物件用自己的 `thickness`。涉及 `getWallGaps`（拆 hSelf/hOther）、`computeMiter`（加 hA/hB 參數）、
-   `clipStubEnd`、`splitByWallIntersections`、`getColGaps`、`getFixedEnd`、`computeWallDragInfo`。
-   不同厚度的牆接 L / T / 十字才對齊；等厚時退化回原結果。
-2. **門窗與牆完整化**（roadmap Phase 1 門窗與牆關係）：
-   - 開口 + 切出來的左右牆段都繼承宿主牆 `thickness`/`typeId`（先前 `placeOpening` 會把牆段重設回 15）
-   - `DoorSegment`/`WindowSegment` 門框線用宿主牆厚；門弧半徑用實際門扇跨距
-   - `mergeOpening` 刪開口時還原牆段 thickness/typeId
-   - **門窗寬度種類系統**：`doorTypes`/`windowTypes`（`{id,name,width}`），鏡像 wallTypes/colTypes，
-     工具列可新增/選/編/刪，存 localStorage。開口記自己的門/窗種類 id（與牆 typeId 不同命名空間）
-3. **分支整理** — 修掉 PR #4 對齊 regression、rebase 到新 master（`88d27a0`），分支現為 `claude/dxf-import`
-4. **幾何測試法** — `scratchpad/extract_and_test.js` 用 Babel 抽出 App.js 純函式跑斷言（27/27 pass）。
-   ⚠️ 尚未收進 repo、沒有 `npm test`
+### 已完成里程碑
 
-**下一個（候選，待使用者選）：**
-- 把幾何測試正式化進 repo（加 `npm test`）
-- 改既有門窗種類寬度 → 套用到已放置開口（stretch；需 `findOpeningGroup` 重算 ptA/ptB）
-- 匯出 pipeline（DXF 匯出 / AutoCAD COM 寫回）— 產品核心交付
-- DXF 匯入收尾（牆柱接合裁切驗證、解析穩健性，需真實圖樣本）
+**A. 畫布與物件基礎（已 merge）**
+- 無限畫布 pan/zoom、牆端點拖拉、Ctrl+Z/Y 復原（最多 50 步）
+- 牆/柱/門/窗種類系統（`wallTypes`/`colTypes`/`doorTypes`/`windowTypes`，可增/編/刪，localStorage）
+- **接合幾何全面 per-wall thickness**：牆-牆/牆-柱/門窗開口的 L/T/十字接合不再寫死 `THICKNESS/2`，
+  各物件用自己的 `thickness`（`getWallGaps` 拆 hSelf/hOther、`computeMiter` 加 hA/hB，等厚時退化回原結果）
+- **門窗與牆完整化**：開口 + 切出的左右牆段繼承宿主牆 `thickness`/`typeId`；門框線用宿主牆厚、
+  門弧半徑用實際門扇跨距；`mergeOpening` 還原
+- **UI 重構對齊 Revit**：Ribbon 分群（建模/修改/檔案）+ 左側性質面板（`typePanelCfg` × `renderTypeList()`
+  四類型表共用）+ 底部狀態列
 
-**先前完成：** DXF 匯入（後端 ezdxf 牆/柱還原）、無限畫布 pan/zoom、牆端點拖拉、
-牆/柱種類系統、Ctrl+Z/Y 復原
+**B. DXF 匯入 → 修改 → 匯出閉環**
+- **匯入（PR #4，已 merge `cc92f02`）**：後端 Flask + ezdxf，平行線配對還原牆、碎片分群還原柱
+  （放棄了純前端解析路線 PR #6）
+- **匯出 MVP（PR #7）**：`src/geometry.js` 抽離（純幾何與 React 解耦，`npm test`）；
+  `buildExportGeometry()` 收「畫面上實際渲染的幾何」（miter/T 裁切/十字缺口/柱裁切都反映在線段上）
+  → 後端 ezdxf 產 R2010 DXF、`$INSUNITS=5`、分圖層；Ribbon「匯出 DXF」下載 `floorai.dxf`
+- **round-trip 修正**：門弧改 `DASHED` 線型、RC 柱併入 `WALL` 層、**幻影柱修正**（parser 跳過
+  `DOOR`/`WINDOW` 圖層——先前窗框會被 `cluster_columns` 誤判成柱）
+- **圖層保留**：匯入的牆/柱記來源圖層，匯出放回同一層；**連顏色/線型/線寬也保留**
+  （`read_layer_table` + 前端 `importedLayers` + 匯出 `setup=True` 載標準線型）；FloorAI 新畫的物件用預設層
+- **測試**：前端 14（`geometry.test.js` 13 + App smoke）、後端 `test_parser.py` 5；
+  5 場景 round-trip + 瀏覽器全鏈路 E2E + 圖層/外觀 round-trip 全通過
 
-**目前分支：** `claude/dxf-import`（PR #4）
+> ⚠️ **DXF 匯入尚未大量測試** — 只用 `test.dxf`（4 牆 + 5 柱）與自家 round-trip 驗過，真實圖面未測。
+> `pair_walls`/`cluster_columns` 參數（牆厚 8–30、柱群聚 50）是針對測試圖調的，換真實圖很可能要重調，
+> 牆柱接合裁切也還沒驗。**確認前不要把 DXF 匯入當穩定功能。**
+
+### 下一個（候選，待使用者選）
+- **DXF 匯入/匯出用真實圖面驗證** — 真實圖多為 mm 單位（牆厚 100–300），
+  匯入 GAP 參數與匯出 scale 都需要單位/比例處理（最關鍵的下一關）
+- AutoCAD COM 寫回（pywin32，需 Windows + AutoCAD 實機）
+- 資料模型地基：物件穩定 id、專案檔 JSON 儲存/開啟、undo 納入類型表
+- 互動優化：性質面板長度直接輸入、改類型寬度套用到已放置開口、框選
+- 技術債：`localhost:5000` 寫死 → package.json proxy + 相對路徑（整合 PR #5 時一起）
+
+**目前分支：** `claude/dxf-import-progress-qtdbet`（PR #7）
 
 ---
 
@@ -85,16 +98,25 @@
 
 | 層級 | 技術 | 狀態 |
 |------|------|------|
-| 前端 | React（`src/App.js` 單檔） | 原型完成 |
-| 後端 | Python + Flask（`backend/`） | DXF 匯入完成 |
-| DXF 解析 | ezdxf | 牆/柱還原完成 |
+| 前端 | React（`src/App.js` + `src/geometry.js`） | 原型完成 |
+| 幾何模組 | `src/geometry.js`（純函式，含 `npm test`） | 完成 |
+| 後端 | Python + Flask（`backend/`） | DXF 匯入/匯出完成 |
+| DXF 解析 | ezdxf | 牆/柱還原 + 匯出完成 |
 | CAD 整合 | pywin32 COM API | 可跑通，穩定性待強化 |
-| AI | Anthropic API (claude-sonnet) | 待整合 |
+| AI | Anthropic API (claude-sonnet) | 待整合（PR #5 需 rebase） |
+
+**單位約定：1 world unit = 1 cm**（牆厚 15、門寬 80 皆公分語意）；DXF 匯出 `$INSUNITS=5`。
 
 ### 後端架構（`backend/`）
-- `app.py`：Flask，`POST /api/upload-dxf` 接收 DXF，回傳 `{ walls, columns, raw_count, wall_count, col_count }`
+- `app.py`：Flask
+  - `POST /api/upload-dxf`：接收 DXF，回傳 `{ walls, columns, raw_count, wall_count, col_count }`
+  - `POST /api/export-dxf`：收 `{lines, arcs, scale?}` → ezdxf 產 R2010 DXF → 回傳檔案下載
+    - 圖層：`WALL`（牆 + RC 柱同層，`LAYER_REMAP` 把 COL 併進 WALL）、`DOOR`、`WINDOW`
+    - 門弧用 `DASHED` 線型（對齊畫面虛線）；`$INSUNITS=5`
 - `dxf_parser.py`：
   - `parse_dxf(path)`：主流程，LINE/LWPOLYLINE → segments，配對牆 + 分群柱
+    - `DOOR`/`WINDOW` 圖層（`OPENING_LAYERS`）的線**不參與**牆/柱辨識——避免 round-trip 時
+      窗框被誤判成柱（幻影柱）。一般 CAD 圖沒這些圖層名，不受影響
   - `pair_walls(segments)`：貪婪配對平行線段 → 牆 `{start:[x,y], end:[x,y], thickness}`，回傳 `(walls, leftover)`
   - `try_pair(a, b, ...)`：兩線段平行 + 間距∈[8,30] + 重疊≥50 → 一道牆（中心線 + 量到的厚度）
   - `cluster_columns(segments)`：union-find 依端點鄰近（<50）分群 → bounding box → 柱 `{cx,cy,w,h,angle}`
@@ -104,11 +126,16 @@
 
 ---
 
-## 四、前端架構（`src/App.js`）
+## 四、前端架構（`src/App.js` + `src/geometry.js`）
+
+> 純幾何函式（接合計算、匯出組裝）都在 `src/geometry.js`，與 React 無關，
+> `npm test` 直接對它斷言；App.js 只剩元件、狀態與互動。下表函式除 UI handler 外多屬 geometry.js，
+> 完整行號對照見 `docs/code-index.md`。
 
 ### 資料結構
+> 匯入的物件多帶一個 `layer`（來源 DXF 圖層），匯出時放回同一圖層；FloorAI 新畫的物件無 `layer`，用預設層。
 - `rawWalls`：所有物件的唯一資料來源（牆段 / 門 / 窗）
-  - 牆段：`{ start: {x,y}, end: {x,y}, typeId, thickness }`
+  - 牆段：`{ start: {x,y}, end: {x,y}, typeId, thickness, layer? }`
   - 門：`{ isDoor: true, ptA, ptB, nx, ny, ux, uy, flipped, width, typeId, thickness }`
     - `typeId`→`doorTypes`（門寬）；`thickness`=宿主牆厚（只給 jamb 渲染用）；`width`=開口跨距
   - 窗：`{ isWindow: true, ptA, ptB, nx, ny, ux, uy, width, typeId, thickness }`（`typeId`→`windowTypes`）
@@ -119,6 +146,8 @@
 - `doorTypes`：`[{ id, name, width }]`（預設 dt1 單開門 80）
 - `windowTypes`：`[{ id, name, width }]`（預設 nt1 一般窗 80）
   - ⚠️ 開口的 `typeId` 指向 door/window 種類，**與牆段的 `typeId`（指向 wallTypes）是不同命名空間**
+- `importedLayers`：`[{ name, color, linetype, lineweight }]` — 匯入 DXF 的來源圖層外觀，
+  匯出時隨 payload 送回後端放回同樣設定（localStorage 持久化，依 name 合併）
 - `selected`：`[{ type: 'rawWall'|'col', idx }]`
 - `viewTransform`：`{ scale, offsetX, offsetY }`（無限畫布）
 - `history` / `future`：undo/redo 快照堆疊
@@ -140,6 +169,15 @@
 | `placeOpening(walls, wallIdx, clickPt, type, flipped)` | 在牆上放置門或窗 |
 | `saveHistory()` | 捕捉目前 rawWalls+columns 快照到 history stack |
 | `undo()` / `redo()` | Ctrl+Z / Ctrl+Y 復原 |
+
+### UI 佈局（仿 Revit 三區）
+- **Ribbon（頂部）**：`RibbonGroup` 分群 — 建模（柱/牆/門/窗）、修改（選取/刪除）、檔案（匯入 DXF/清除）。
+  放「動詞」：要做什麼。
+- **性質面板（左側 264px）**：`renderProperties()` — 選取優先顯示物件性質（類型下拉 + 參數列 `PropRow`），
+  否則依模式顯示 Type Selector（`typePanelCfg` × `renderTypeList()`，四種類型表共用一套 UI）。
+  放「名詞」：用什麼類型做。
+- **狀態列（底部）**：`getHint()` 操作提示。
+- 畫布包在 flex 容器裡（不再是全螢幕絕對定位）；座標函式用 `svgRef` 的實際尺寸，不受佈局影響。
 
 ### 操作模式（`mode` state）
 - `column`：放置柱（C 鍵），空白鍵旋轉，支援 RC / H 鋼柱
@@ -190,14 +228,20 @@ worldToScreen(wx, wy) → { x: wx*scale + offsetX, y: svgH - (wy*scale + offsetY
 - 最多保留 50 步
 
 ### 已知限制（暫緩）
+- **DXF 匯入尚未大量測試** — 只驗證過 `test.dxf`，真實圖面未測；柱配對參數（GAP/CLUSTER）是
+  針對這份測試圖調的，其他圖面可能需調；牆柱接合裁切是否正確也待確認。**目前不能當穩定功能用。**
+- DXF 解析只處理 LINE / LWPOLYLINE
 - 斜牆支援：disabled（畫牆強制正交 `applyOrthoLock`；接合幾何是向量算的、理論上支援斜角但未測）
 - **per-wall thickness 已完成**（牆-牆/牆-柱/門窗）。唯二仍用全域 `THICKNESS` 的是「門窗開口的
   放置 click 容差」與「拖放 dead-zone」——屬互動容差、非接合幾何，影響小，暫留
 - 改既有門窗種類寬度 → 尚未套用到「已放置」的開口（需 `findOpeningGroup` 重算 ptA/ptB）。
   目前只支援「新放置用選定寬度」
-- 幾何測試（`scratchpad/extract_and_test.js`）尚未收進 repo、無 `npm test`
-- DXF 牆柱接合裁切待確認（匯入後牆與角柱的接合處是否正確）
-- DXF 解析只處理 LINE / LWPOLYLINE；柱配對參數（GAP/CLUSTER）對 test.dxf 調過，其他圖面可能需調
+- **匯出檔 re-import 時，門窗不會還原成開口**（parser 跳過 DOOR/WINDOW 圖層，只還原牆+柱）。
+  要把開口還原回來屬「寄宿式資料模型」重構的範圍，暫緩。實際工作流是讀真實圖→改→匯出，
+  少會 re-import 自己的匯出，影響小
+- **牆被開口切成獨立段**：放門窗會把一道牆 splice 成「左段+開口+右段」三個物件（切割式模型），
+  牆非單一實體、匯出時開口處牆面線歸在開口圖層。改成寄宿式（牆保持一體）是待決定的大重構
+- AutoCAD COM 寫回未做（匯出到 DXF 檔為止）；undo 快照不含四張類型表
 
 ---
 
