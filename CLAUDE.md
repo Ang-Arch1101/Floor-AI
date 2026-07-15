@@ -34,15 +34,34 @@
 > `pair_walls`/`cluster_columns` 參數（牆厚 8–30、柱群聚 50）是針對測試圖調的，換真實圖很可能要重調，
 > 牆柱接合裁切也還沒驗。**確認前不要把 DXF 匯入當穩定功能。**
 
+**C. MCP server 直接操控畫布（本分支）**
+- **收斂自已關閉的 PR #5**：只做 B（MCP server），不做前端 AI 面板；不需 API key、不經瀏覽器
+- **`backend/mcp_server.py`（FastMCP，stdio）**：get_floor_plan / add_wall / add_column /
+  add_door / add_window（補上 PR #5 缺的門窗，移植 `placeOpening` 切段邏輯）/
+  modify_wall / modify_column / delete_object（刪開口自動合併，移植 `deleteSelected`）/ clear_all；
+  docstring 全用 cm、座標自動 snap 到 GRID=20
+- **`backend/state_store.py`**：`floor_plan.json` 唯一讀寫入口 —— 跨行程檔案鎖（fcntl/msvcrt）+
+  版本號 + 原子寫入（temp + os.replace），Flask 與 MCP 兩個行程不互蓋
+- **同步機制（輪詢 + 版本號，經討論定案）**：前端每秒 GET `/api/state`，version 較新才套用；
+  本地變動 debounce 400ms 後 POST（帶 `baseVersion` 樂觀鎖），拖曳中不送；
+  409 衝突（多半是 MCP 剛寫）→ 套用後端版本收斂（後端贏）
+- **物件穩定 id**：前端 `genId()`（base36 7 碼）自癒式 backfill（舊資料/DXF 匯入/開口切段都補）；
+  MCP 端 uuid hex 7 碼，格式互通；匯入物件的 `layer` 欄位在 MCP 增改刪後保留
+- **測試**：後端 `test_mcp_server.py` 14 項（工具讀寫/切段/layer 保留/樂觀鎖）；
+  前端 smoke test 下同步停用（`SYNC_DISABLED`）；Flask+MCP 雙行程 E2E 驗過
+- ⚠️ 已知限制：MCP 的 add_wall 不做 `splitByWallIntersections` 資料層切分（接合靠 render）、
+  放柱不做 `splitAllWallsByColumn`；MCP 變更不進前端 undo history；409 後端贏會蓋掉
+  同一秒內的畫布手動操作（單人自用可接受）
+
 ### 下一個（候選，待使用者選）
 - **DXF 匯入/匯出用真實圖面驗證** — 真實圖多為 mm 單位（牆厚 100–300），
   匯入 GAP 參數與匯出 scale 都需要單位/比例處理（最關鍵的下一關）
 - AutoCAD COM 寫回（pywin32，需 Windows + AutoCAD 實機）
-- 資料模型地基：物件穩定 id、專案檔 JSON 儲存/開啟、undo 納入類型表
+- 資料模型地基：專案檔 JSON 儲存/開啟、undo 納入類型表（物件穩定 id 已在 C 完成）
 - 互動優化：性質面板長度直接輸入、改類型寬度套用到已放置開口、框選
-- 技術債：`localhost:5000` 寫死 → package.json proxy + 相對路徑（整合 PR #5 時一起）
+- 技術債：`localhost:5000` 已收斂為 `API_BASE` 常數，之後再換 package.json proxy + 相對路徑
 
-**目前分支：** `claude/dxf-import-progress-qtdbet`（PR #7）
+**目前分支：** `claude/mcp-server-canvas-0vwrch`（MCP server）
 
 ---
 

@@ -5,6 +5,7 @@ import ezdxf
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 from dxf_parser import parse_dxf
+from state_store import read_state, replace_state
 
 app = Flask(__name__)
 CORS(app)
@@ -17,6 +18,32 @@ EXPORT_LAYERS = {
 }
 # RC 柱與牆歸同一圖層（結構元件慣例）：把 buildExportGeometry 標的 COL 併進 WALL
 LAYER_REMAP = {"COL": "WALL"}
+
+
+@app.route("/api/state", methods=["GET"])
+def get_state():
+    """前端輪詢用：回傳 floor_plan.json 目前內容（含 version）。"""
+    return jsonify(read_state())
+
+
+@app.route("/api/state", methods=["POST"])
+def post_state():
+    """前端整包覆寫畫布狀態（樂觀鎖）。
+
+    body: { baseVersion, rawWalls, columns, wallTypes, colTypes, doorTypes, windowTypes }
+    baseVersion 與檔案目前 version 不符 → 409 並附上最新 state，
+    由前端套用後端版本收斂（多半是 MCP 剛寫入）。
+    """
+    data = request.get_json(silent=True)
+    if data is None:
+        return jsonify({"error": "invalid json"}), 400
+    base = data.get("baseVersion")
+    if not isinstance(base, int):
+        return jsonify({"error": "baseVersion required"}), 400
+    new_state, current = replace_state(data, base)
+    if new_state is None:
+        return jsonify({"error": "version conflict", "state": current}), 409
+    return jsonify({"version": new_state["version"]})
 
 
 @app.route("/api/upload-dxf", methods=["POST"])
