@@ -26,3 +26,7 @@ yarn-error.log*
 __pycache__/
 *.pyc
 *.pyo
+
+# FloorAI 執行時狀態檔（前端 ↔ MCP server 同步用，勿 commit）
+backend/floor_plan.json
+backend/floor_plan.json.lock

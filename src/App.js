@@ -36,6 +36,13 @@ import {
 } from './geometry';
 
 
+const API_BASE = 'http://localhost:5000';
+// jsdom smoke test（NODE_ENV=test）或無 fetch 的環境不啟用前後端同步
+const SYNC_DISABLED = typeof fetch !== 'function' || process.env.NODE_ENV === 'test';
+
+// 7 碼 base36 亂數 id；MCP 端用 uuid hex 前 7 碼，同為短字串格式、可互通
+function genId() { return Math.random().toString(36).slice(2, 9); }
+
 function EdgeWithGaps({ x0, y0, x1, y1, gaps, color }) {
   if (!gaps || gaps.length === 0) return <line x1={x0} y1={y0} x2={x1} y2={y1} stroke={color} strokeWidth="1.5" />;
   const sorted = [...gaps].sort((a, b) => a[0] - b[0]);
@@ -311,6 +318,76 @@ export default function App() {
     localStorage.setItem('floorAI_windowTypes', JSON.stringify(windowTypes));
     localStorage.setItem('floorAI_importedLayers', JSON.stringify(importedLayers));
   }, [rawWalls, columns, wallTypes, colTypes, doorTypes, windowTypes, importedLayers]);
+
+  // 補穩定 id：舊 localStorage 資料、DXF 匯入、開口切段產生的新牆段，
+  // 缺 id 就補一個（已有的不動）。MCP server 靠這個 id 指定要改/刪哪個物件。
+  useEffect(() => {
+    if (rawWalls.some(w => !w.id)) setRawWalls(prev => prev.map(w => w.id ? w : { ...w, id: genId() }));
+    if (columns.some(c => !c.id)) setColumns(prev => prev.map(c => c.id ? c : { ...c, id: genId() }));
+  }, [rawWalls, columns]);
+
+  // ── 前後端狀態同步（backend/floor_plan.json，MCP server 操控畫布的通道）──
+  // 機制：輪詢 + 版本號。GET 到的 version 比 syncVersion 新 → 套用到畫布；
+  // 本地變動 debounce 400ms 後 POST（帶 baseVersion 樂觀鎖），拖曳中不送；
+  // POST 撞到 409（多半是 MCP 剛寫入）→ 套用後端版本收斂。
+  const syncVersion = useRef(0);
+  const applyingRemote = useRef(false);
+  const interacting = !!(dragging || dragWall || wallDragPending || endpointDrag);
+  const interactingRef = useRef(false);
+  interactingRef.current = interacting;
+
+  function applyServerState(s) {
+    applyingRemote.current = true;
+    syncVersion.current = s.version ?? 0;
+    setSelected([]); // 選取以索引記錄，整包替換後不可靠
+    setRawWalls(s.rawWalls ?? []);
+    setColumns(s.columns ?? []);
+    if (s.wallTypes?.length) setWallTypes(s.wallTypes);
+    if (s.colTypes?.length) setColTypes(s.colTypes);
+    if (s.doorTypes?.length) setDoorTypes(s.doorTypes);
+    if (s.windowTypes?.length) setWindowTypes(s.windowTypes);
+  }
+
+  useEffect(() => {
+    if (SYNC_DISABLED) return;
+    const iv = setInterval(async () => {
+      if (interactingRef.current) return;
+      try {
+        const res = await fetch(`${API_BASE}/api/state`);
+        if (!res.ok) return;
+        const s = await res.json();
+        if ((s.version ?? 0) > syncVersion.current) applyServerState(s);
+      } catch { /* 後端沒開就靜默略過 */ }
+    }, 1000);
+    return () => clearInterval(iv);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (SYNC_DISABLED) return;
+    if (applyingRemote.current) { applyingRemote.current = false; return; } // 這批變更來自後端，不用送回去
+    if (interacting) return; // 拖曳結束時 interacting 變化會再進來一次
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/state`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ baseVersion: syncVersion.current, rawWalls, columns, wallTypes, colTypes, doorTypes, windowTypes }),
+        });
+        if (res.status === 409) {
+          const data = await res.json().catch(() => null);
+          if (data?.state) applyServerState(data.state);
+          return;
+        }
+        if (res.ok) {
+          const data = await res.json();
+          if (typeof data.version === 'number') syncVersion.current = data.version;
+        }
+      } catch { /* 後端沒開就靜默略過 */ }
+    }, 400);
+    return () => clearTimeout(timer);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rawWalls, columns, wallTypes, colTypes, doorTypes, windowTypes, interacting]);
 
   function saveHistory() {
     setHistory(prev => [...prev.slice(-49), { rawWalls, columns }]);
@@ -1156,7 +1233,7 @@ if (mode !== 'wall') setSnapIndicator(null);
               const fd = new FormData();
               fd.append('file', file);
               try {
-                const res = await fetch('http://localhost:5000/api/upload-dxf', { method: 'POST', body: fd });
+                const res = await fetch(`${API_BASE}/api/upload-dxf`, { method: 'POST', body: fd });
                 const data = await res.json();
                 if (data.error) { console.error('DXF 匯入錯誤:', data.error); return; }
                 const walls = data.walls ?? [];
@@ -1204,7 +1281,7 @@ if (mode !== 'wall') setSnapIndicator(null);
             payload.layers = importedLayers;  // 來源圖層外觀，匯出時放回
             if (payload.lines.length === 0 && payload.arcs.length === 0) { window.alert('畫布是空的，沒有可匯出的內容'); return; }
             try {
-              const res = await fetch('http://localhost:5000/api/export-dxf', {
+              const res = await fetch(`${API_BASE}/api/export-dxf`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload),
