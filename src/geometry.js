@@ -766,6 +766,68 @@ function columnExportLines(col, rawWalls) {
 // 主入口：整個場景 → { lines: [{x1,y1,x2,y2,layer}], arcs: [{cx,cy,r,startDeg,endDeg,layer}] }
 // 每個物件用自己的來源圖層（匯入時記下的 `layer`）；沒有的（FloorAI 新畫）用預設圖層。
 // 後端 app.py 會把預設的 COL 併進 WALL，並依需要建出來源圖層。
+// ── 框選（marquee）判定 ──────────────────────────────────────────
+// rect：{ minX, minY, maxX, maxY }（世界座標，已正規化好 min/max）
+// mode：'window' = 左→右，物件須「完全被框住」；'crossing' = 右→左，「碰到即選」
+
+function pointInRect(pt, rect) {
+  return pt.x >= rect.minX && pt.x <= rect.maxX &&
+         pt.y >= rect.minY && pt.y <= rect.maxY;
+}
+
+function rectsOverlap(a, b) {
+  return a.minX <= b.maxX && a.maxX >= b.minX &&
+         a.minY <= b.maxY && a.maxY >= b.minY;
+}
+
+// 線段 (a,b) 是否與矩形相交（含端點落在矩形內）
+function segIntersectsRect(a, b, rect) {
+  if (pointInRect(a, rect) || pointInRect(b, rect)) return true;
+  const c = [
+    { x: rect.minX, y: rect.minY },
+    { x: rect.maxX, y: rect.minY },
+    { x: rect.maxX, y: rect.maxY },
+    { x: rect.minX, y: rect.maxY },
+  ];
+  for (let i = 0; i < 4; i++) {
+    const p = c[i], q = c[(i + 1) % 4];
+    if (segIntersectT(a.x, a.y, b.x, b.y, p.x, p.y, q.x, q.y)) return true;
+  }
+  return false;
+}
+
+// 對一組物件做框選，回傳 [{ type: 'rawWall'|'col', idx }]
+// filter：{ wall, column, opening } 三個布林，控制哪些類別參與框選
+function boxSelect(rawWalls, columns, rect, mode, filter = { wall: true, column: true, opening: true }) {
+  const enclosed = mode === 'window';
+  const hitSeg = (a, b) => enclosed
+    ? (pointInRect(a, rect) && pointInRect(b, rect))
+    : segIntersectsRect(a, b, rect);
+  const result = [];
+
+  rawWalls.forEach((w, i) => {
+    if (w.isDoor || w.isWindow) {
+      if (filter.opening && hitSeg(w.ptA, w.ptB)) result.push({ type: 'rawWall', idx: i });
+    } else {
+      if (filter.wall && hitSeg(w.start, w.end)) result.push({ type: 'rawWall', idx: i });
+    }
+  });
+
+  if (filter.column) {
+    columns.forEach((col, i) => {
+      const { hw, hh } = getColCorners(col);
+      const box = { minX: col.cx - hw, minY: col.cy - hh, maxX: col.cx + hw, maxY: col.cy + hh };
+      const hit = enclosed
+        ? (box.minX >= rect.minX && box.maxX <= rect.maxX &&
+           box.minY >= rect.minY && box.maxY <= rect.maxY)
+        : rectsOverlap(box, rect);
+      if (hit) result.push({ type: 'col', idx: i });
+    });
+  }
+
+  return result;
+}
+
 function buildExportGeometry(rawWalls, columns) {
   const lines = [];
   const arcs = [];
@@ -824,5 +886,9 @@ export {
   computeWallDragInfo,
   clipStubEnd,
   splitEdgeByGaps,
+  pointInRect,
+  rectsOverlap,
+  segIntersectsRect,
+  boxSelect,
   buildExportGeometry,
 };

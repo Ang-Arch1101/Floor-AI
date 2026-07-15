@@ -34,15 +34,22 @@
 > `pair_walls`/`cluster_columns` 參數（牆厚 8–30、柱群聚 50）是針對測試圖調的，換真實圖很可能要重調，
 > 牆柱接合裁切也還沒驗。**確認前不要把 DXF 匯入當穩定功能。**
 
+**C. 框選 + 篩選（本分支）**
+- **窗選 / 框選**：select 模式空白處拖曳起框，方向決定語意——左→右=窗選（完全框住才選，藍實框）、
+  右→左=框選（碰到即選，綠虛框），對齊 AutoCAD 肌肉記憶；Ctrl 拖曳可累加選取
+- **篩選**：左側性質面板（select 閒置時）三個類別開關（牆／柱／門窗），控制框選抓哪些物件
+- 純幾何判定在 `geometry.js`（`boxSelect` + `pointInRect`/`rectsOverlap`/`segIntersectsRect`），
+  App.js 只做互動與矩形 overlay 渲染；新增 5 筆 `boxSelect` 測試（前端共 19 通過）
+
 ### 下一個（候選，待使用者選）
 - **DXF 匯入/匯出用真實圖面驗證** — 真實圖多為 mm 單位（牆厚 100–300），
   匯入 GAP 參數與匯出 scale 都需要單位/比例處理（最關鍵的下一關）
 - AutoCAD COM 寫回（pywin32，需 Windows + AutoCAD 實機）
 - 資料模型地基：物件穩定 id、專案檔 JSON 儲存/開啟、undo 納入類型表
-- 互動優化：性質面板長度直接輸入、改類型寬度套用到已放置開口、框選
+- 互動優化：性質面板長度直接輸入、改類型寬度套用到已放置開口（框選已完成）
 - 技術債：`localhost:5000` 寫死 → package.json proxy + 相對路徑（整合 PR #5 時一起）
 
-**目前分支：** `claude/dxf-import-progress-qtdbet`（PR #7）
+**目前分支：** `claude/window-selection-filtering-jnlgaq`（框選 + 篩選）
 
 ---
 

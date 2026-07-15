@@ -32,6 +32,7 @@ import {
   computeAllMiters,
   computeWallDragInfo,
   clipStubEnd,
+  boxSelect,
   buildExportGeometry,
 } from './geometry';
 
@@ -226,6 +227,12 @@ export default function App() {
   const [viewTransform, setViewTransform] = useState({ scale: 1, offsetX: 0, offsetY: 0 });
   const [panning, setPanning] = useState(null);
   const [endpointDrag, setEndpointDrag] = useState(null);
+  // 框選：mousedown 空白處起框，mousemove 更新，mouseup 結算選取
+  const [marquee, setMarquee] = useState(null); // { startRaw:{x,y}, curRaw:{x,y} } 世界座標
+  const marqueeRef = useRef(null);
+  const suppressClickRef = useRef(false); // 框選拖曳後抑制隨後的 handleClick
+  // 框選篩選：哪些類別參與（牆/柱/門窗）
+  const [selFilter, setSelFilter] = useState({ wall: true, column: true, opening: true });
   // 匯入 DXF 的來源圖層外觀（name→{color,linetype,lineweight}），匯出時放回同樣設定
   const [importedLayers, setImportedLayers] = useState(() => {
     try { return JSON.parse(localStorage.getItem('floorAI_importedLayers') ?? 'null') ?? []; } catch { return []; }
@@ -275,6 +282,7 @@ export default function App() {
       const tag = e.target.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
       if (e.key === 'Escape') {
+        if (marquee) { setMarquee(null); marqueeRef.current = null; return; }
         if (mode === 'select') { setSelected([]); }
         else if (mode === 'wall' && startPt) { setStartPt(null); }
         else if (suspended) { setSuspended(false); setStartPt(null); setSelected([]); setMode('select'); }
@@ -300,7 +308,7 @@ export default function App() {
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected, singleSel, mode, suspended, startPt, rawWalls, columns, history, future]);
+  }, [selected, singleSel, mode, suspended, startPt, rawWalls, columns, history, future, marquee]);
 
   useEffect(() => {
     localStorage.setItem('floorAI_rawWalls', JSON.stringify(rawWalls));
@@ -532,6 +540,8 @@ export default function App() {
   }
 
   function handleMouseDown(e) {
+    // 清掉可能殘留的抑制旗標（若上次框選後瀏覽器沒觸發 click，避免誤吞下一次點擊）
+    suppressClickRef.current = false;
     if (e.button === 1) {
       e.preventDefault();
       setPanning({ startX: e.clientX, startY: e.clientY, origOffsetX: viewTransform.offsetX, origOffsetY: viewTransform.offsetY });
@@ -598,6 +608,10 @@ export default function App() {
         wallDragPendingRef.current = pending;
         return;
       }
+      // 空白處 → 開始框選
+      const m = { startRaw: rawPt, curRaw: rawPt };
+      setMarquee(m);
+      marqueeRef.current = m;
       return;
     }
 
@@ -684,6 +698,14 @@ function applyWallSnap(pt) {
         next[endpointDrag.wallIdx] = { ...w, [endpointDrag.endpoint]: snapped };
         return next;
       });
+      return;
+    }
+    if (marquee) {
+      const rawPt = getRawPt(e);
+      const m = { ...marquee, curRaw: rawPt };
+      setMarquee(m);
+      marqueeRef.current = m;
+      setCursor(rawPt);
       return;
     }
     let pt = getPoint(e);
@@ -774,6 +796,30 @@ if (mode !== 'wall') setSnapIndicator(null);
   function handleMouseUp(e) {
     if (panning) { setPanning(null); return; }
     if (endpointDrag) { setEndpointDrag(null); return; }
+    if (marquee) {
+      const m = marqueeRef.current ?? marquee;
+      setMarquee(null); marqueeRef.current = null;
+      const dScreen = Math.hypot(
+        (m.curRaw.x - m.startRaw.x) * viewTransform.scale,
+        (m.curRaw.y - m.startRaw.y) * viewTransform.scale,
+      );
+      if (dScreen < 4) return; // 幾乎沒動 → 當成一般點擊，交給 handleClick 清除選取
+      const selMode = m.curRaw.x >= m.startRaw.x ? 'window' : 'crossing';
+      const rect = {
+        minX: Math.min(m.startRaw.x, m.curRaw.x), maxX: Math.max(m.startRaw.x, m.curRaw.x),
+        minY: Math.min(m.startRaw.y, m.curRaw.y), maxY: Math.max(m.startRaw.y, m.curRaw.y),
+      };
+      const hits = boxSelect(rawWalls, columns, rect, selMode, selFilter);
+      const ctrlHeld = e.ctrlKey || e.metaKey;
+      setSelected(prev => {
+        if (!ctrlHeld) return hits;
+        const merged = [...prev];
+        hits.forEach(h => { if (!merged.some(s => s.type === h.type && s.idx === h.idx)) merged.push(h); });
+        return merged;
+      });
+      suppressClickRef.current = true; // 抑制隨後的 click（避免清掉剛框到的選取）
+      return;
+    }
     if (wallDragPending) {
       setWallDragPending(null);
        wallDragPendingRef.current = null;
@@ -833,6 +879,7 @@ if (mode !== 'wall') setSnapIndicator(null);
   }
 
   function handleClick(e) {
+    if (suppressClickRef.current) { suppressClickRef.current = false; return; }
     if (dragging) return;
     const rawPt = getRawPt(e);
     const pt = { x: snap(rawPt.x), y: snap(rawPt.y) };
@@ -936,7 +983,7 @@ if (mode !== 'wall') setSnapIndicator(null);
       if (obj) return '已選取牆段 — 拖拉平移，點標註數字修改長度，Delete 刪除，Ctrl+點擊複選';
     }
     if (suspended) return `已暫停（${mode === 'column' ? '柱' : mode === 'wall' ? '牆' : mode === 'door' ? '門' : '窗'}模式）— 點擊繼續放置，再按 ESC 回到選取`;
-    if (mode === 'select')  return '選取模式 — 點擊選取，Ctrl+點擊複選';
+    if (mode === 'select')  return marquee ? (marquee.curRaw.x >= marquee.startRaw.x ? '窗選：框住的物件才選（左→右）' : '框選：碰到的物件都選（右→左）') : '選取模式 — 點擊選取，Ctrl+點擊複選，空白處拖曳框選';
     if (mode === 'column')  return `放置 ${colType === 'rc' ? 'RC 柱' : 'H 鋼柱'}（80×100）— 點擊放置，空白鍵旋轉，ESC 暫停`;
     if (mode === 'wall')    return startPt ? '點第二點完成牆段（鎖定正交），ESC 取消本段' : '點空白處開始畫牆，ESC 暫停';
     if (mode === 'door')    return dragging ? '拖拉中⋯ 放開確認' : '靠近牆放置門，ESC 暫停';
@@ -1113,12 +1160,28 @@ if (mode !== 'wall') setSnapIndicator(null);
     if (mode === 'door') return renderTypeList(typePanelCfg.door);
     if (mode === 'window') return renderTypeList(typePanelCfg.window);
     return (
-      <div style={{ color: '#666', fontSize: 12, lineHeight: 1.8 }}>
-        未選取物件<br />
-        牆段 {rawWalls.filter(w => !w.isDoor && !w.isWindow).length}、
-        門 {rawWalls.filter(w => w.isDoor).length}、
-        窗 {rawWalls.filter(w => w.isWindow).length}、
-        柱 {columns.length}
+      <div>
+        <div style={sectionTitleStyle}>框選篩選</div>
+        <div style={{ color: '#666', fontSize: 11, lineHeight: 1.6, marginBottom: 8 }}>
+          左→右框住才選（藍），右→左碰到即選（綠）
+        </div>
+        {[
+          { key: 'wall', label: '牆' },
+          { key: 'column', label: '柱' },
+          { key: 'opening', label: '門窗' },
+        ].map(f => (
+          <label key={f.key} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#aaa', padding: '3px 0', cursor: 'pointer' }}>
+            <input type="checkbox" checked={selFilter[f.key]}
+              onChange={e => setSelFilter(prev => ({ ...prev, [f.key]: e.target.checked }))} />
+            {f.label}
+          </label>
+        ))}
+        <div style={{ color: '#666', fontSize: 12, lineHeight: 1.8, marginTop: 10, borderTop: '1px solid #262626', paddingTop: 8 }}>
+          牆段 {rawWalls.filter(w => !w.isDoor && !w.isWindow).length}、
+          門 {rawWalls.filter(w => w.isDoor).length}、
+          窗 {rawWalls.filter(w => w.isWindow).length}、
+          柱 {columns.length}
+        </div>
       </div>
     );
   }
@@ -1303,6 +1366,21 @@ if (mode !== 'wall') setSnapIndicator(null);
               <circle cx={sp.x} cy={sp.y} r={6} fill="#00d4aa" stroke="#fff" strokeWidth="1.5" style={{ cursor: 'crosshair' }} />
               <circle cx={ep.x} cy={ep.y} r={6} fill="#00d4aa" stroke="#fff" strokeWidth="1.5" style={{ cursor: 'crosshair' }} />
             </g>
+          );
+        })()}
+
+        {marquee && (() => {
+          const a = worldToScreen(marquee.startRaw.x, marquee.startRaw.y);
+          const b = worldToScreen(marquee.curRaw.x, marquee.curRaw.y);
+          const x = Math.min(a.x, b.x), y = Math.min(a.y, b.y);
+          const w = Math.abs(a.x - b.x), h = Math.abs(a.y - b.y);
+          const isWindow = marquee.curRaw.x >= marquee.startRaw.x; // 左→右 = 窗選
+          const stroke = isWindow ? '#3b82f6' : '#22c55e';
+          return (
+            <rect x={x} y={y} width={w} height={h}
+              fill={stroke} fillOpacity={0.08}
+              stroke={stroke} strokeWidth={1}
+              strokeDasharray={isWindow ? undefined : '5 4'} />
           );
         })()}
       </svg>

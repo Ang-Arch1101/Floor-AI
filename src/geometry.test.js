@@ -7,6 +7,7 @@ import {
   clipStubEnd,
   placeOpening,
   splitEdgeByGaps,
+  boxSelect,
   buildExportGeometry,
 } from './geometry';
 
@@ -146,5 +147,51 @@ describe('DXF 匯出組裝（buildExportGeometry）', () => {
     expect(lines.some(l => l.layer === 'WALL')).toBe(true);     // 新畫牆用預設
     expect(lines.some(l => l.layer === 'A-COL')).toBe(true);    // 匯入柱放回來源層
     expect(lines.every(l => l.layer !== 'COL')).toBe(true);     // 這批柱都有來源層，不會是預設 COL
+  });
+});
+
+describe('框選 boxSelect', () => {
+  const walls = [
+    wall(0, 0, 100, 0),      // idx 0：完全在小框內
+    wall(200, 0, 300, 0),    // idx 1：在框外
+    wall(50, 0, 250, 0),     // idx 2：橫跨框邊界
+  ];
+  const cols = [
+    { cx: 50, cy: 50, type: 'rc', rotated: false, w: 20, h: 20 },   // idx 0：在框內
+    { cx: 400, cy: 50, type: 'rc', rotated: false, w: 20, h: 20 },  // idx 1：框外
+  ];
+  const rect = { minX: -10, minY: -10, maxX: 150, maxY: 100 };
+
+  test('窗選（window）：只選完全被框住的牆', () => {
+    const sel = boxSelect(walls, [], rect, 'window');
+    const idxs = sel.filter(s => s.type === 'rawWall').map(s => s.idx);
+    expect(idxs).toContain(0);    // 完全在內
+    expect(idxs).not.toContain(1); // 框外
+    expect(idxs).not.toContain(2); // 跨邊界（端點在框外）→ 窗選不選
+  });
+
+  test('框選（crossing）：碰到邊界的牆也選', () => {
+    const sel = boxSelect(walls, [], rect, 'crossing');
+    const idxs = sel.filter(s => s.type === 'rawWall').map(s => s.idx);
+    expect(idxs).toContain(0);
+    expect(idxs).toContain(2);     // 跨邊界 → crossing 會選
+    expect(idxs).not.toContain(1);
+  });
+
+  test('柱：窗選要整顆在框內', () => {
+    const sel = boxSelect([], cols, rect, 'window');
+    expect(sel).toEqual([{ type: 'col', idx: 0 }]);
+  });
+
+  test('篩選：關閉牆 → 框選結果不含牆', () => {
+    const sel = boxSelect(walls, cols, rect, 'crossing', { wall: false, column: true, opening: true });
+    expect(sel.some(s => s.type === 'rawWall')).toBe(false);
+    expect(sel.some(s => s.type === 'col')).toBe(true);
+  });
+
+  test('篩選：門窗類別獨立於牆', () => {
+    const opening = { isWindow: true, ptA: { x: 40, y: 0 }, ptB: { x: 60, y: 0 }, typeId: 'nt1' };
+    const sel = boxSelect([opening], [], rect, 'window', { wall: false, column: false, opening: true });
+    expect(sel).toEqual([{ type: 'rawWall', idx: 0 }]);
   });
 });
