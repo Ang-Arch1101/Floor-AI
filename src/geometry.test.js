@@ -6,6 +6,7 @@ import {
   getWallGaps,
   clipStubEnd,
   placeOpening,
+  reflowOpening,
   splitEdgeByGaps,
   boxSelect,
   buildExportGeometry,
@@ -193,5 +194,45 @@ describe('框選 boxSelect', () => {
     const opening = { isWindow: true, ptA: { x: 40, y: 0 }, ptB: { x: 60, y: 0 }, typeId: 'nt1' };
     const sel = boxSelect([opening], [], rect, 'window', { wall: false, column: false, opening: true });
     expect(sel).toEqual([{ type: 'rawWall', idx: 0 }]);
+  });
+});
+
+describe('reflowOpening 開口重排', () => {
+  // 在 0..300 的牆上放一扇寬 width 的窗，回傳三元組 [左段, 開口, 右段]
+  const build = (width) =>
+    placeOpening([wall(0, 0, 300, 0)], 0, { x: 150, y: 0 }, 'window', false, { id: 'nt1', width });
+  const span = (op) => Math.hypot(op.ptB.x - op.ptA.x, op.ptB.y - op.ptA.y);
+
+  test('加寬：跨距=新寬、中心不變、三元組長度不變、ok', () => {
+    const r = reflowOpening(build(80), 1, { id: 'nt1', width: 120 });
+    expect(r.ok).toBe(true);
+    expect(r.walls).toHaveLength(3);
+    const op = r.walls[1];
+    expect(span(op)).toBeCloseTo(120);
+    expect((op.ptA.x + op.ptB.x) / 2).toBeCloseTo(150); // 中心不變
+    expect(op.width).toBeCloseTo(120);
+  });
+
+  test('縮窄：開口變窄、兩側牆段變長', () => {
+    const r = reflowOpening(build(80), 1, { id: 'nt1', width: 40 });
+    expect(r.ok).toBe(true);
+    expect(span(r.walls[1])).toBeCloseTo(40);
+    const leftLen = Math.hypot(r.walls[0].end.x - r.walls[0].start.x, r.walls[0].end.y - r.walls[0].start.y);
+    expect(leftLen).toBeCloseTo(130); // 150 - 40/2
+  });
+
+  test('溢出（新寬 >= 宿主段長）：回傳原 walls、ok:false、開口未被吃掉', () => {
+    const walls = build(80);
+    const r = reflowOpening(walls, 1, { id: 'nt1', width: 300 });
+    expect(r.ok).toBe(false);
+    expect(r.walls).toBe(walls);        // 原陣列未動
+    expect(r.walls[1].isWindow).toBe(true);
+  });
+
+  test('傳入非開口 index → no-op、ok', () => {
+    const walls = build(80);
+    const r = reflowOpening(walls, 0, { id: 'nt1', width: 120 });
+    expect(r.ok).toBe(true);
+    expect(r.walls).toBe(walls);
   });
 });

@@ -58,6 +58,7 @@ App.js 渲染管線與 DXF 匯出共用；`npm test` 直接對這裡斷言（`sr
 | `getFixedEnd(wall, rawWalls)` | L71 | 判斷哪端是 T 型固定端 |
 | `placeOpening(walls, wallIdx, clickPt, type, flipped, openingType)` | L92 | 插入門/窗（截成3段，繼承宿主牆厚/typeId/layer） |
 | `findOpeningGroup` / `mergeOpening` | L122/L128 | 找開口左右牆段 / 合併三段回一段（還原 typeId/thickness/layer） |
+| `reflowOpening(walls, objIdx, newOpeningType)` | L136 | 已放置開口換型別/寬度：合回宿主牆→同中心重放；回傳 `{walls, ok}`，塞不下時 ok:false 保留原狀 |
 | `getColCorners` / `ptInCol` | L136/L144 | 柱範圍計算與命中測試 |
 | `splitWallByColumns` / `splitAllWallsByColumn` | L151/L199 | 牆被柱截斷（資料層） |
 | `segIntersectT(...)` | L208 | 線段交叉 → `{tA,tB}` |

@@ -21,6 +21,7 @@ import {
   placeOpening,
   findOpeningGroup,
   mergeOpening,
+  reflowOpening,
   getColCorners,
   ptInCol,
   splitWallByColumns,
@@ -436,11 +437,30 @@ export default function App() {
     setDoorTypePanel(false);
   }
 
-  // Edits the type definition (affects future placements); existing openings
-  // keep their baked-in geometry/width — re-flowing them is a deferred stretch.
+  // 把「所有引用某開口型別」的已放置開口重排成新寬度；回傳塞不下（被跳過）的數量。
+  // isDoor：true=門型別、false=窗型別。重排後三元組 index 不變，故可依序套用。
+  // 純計算（不在 setState updater 裡做副作用），有實際變更才 saveHistory + 寫回。
+  function reflowOpeningsOfType(isDoor, id, width) {
+    let skipped = 0, changed = false;
+    let next = rawWalls;
+    for (let i = 0; i < next.length; i++) {
+      const w = next[i];
+      if ((isDoor ? w.isDoor : w.isWindow) && w.typeId === id) {
+        const r = reflowOpening(next, i, { id, width });
+        if (r.ok) { if (r.walls !== next) changed = true; next = r.walls; }
+        else skipped++;
+      }
+    }
+    if (changed) { saveHistory(); setRawWalls(next); }
+    return { skipped };
+  }
+
+  // 編輯型別定義（套用到未來放置），並把已放置的同型別開口重排成新寬度（塞不下者跳過並提示）。
   function handleEditDoorType(id, name, width) {
     setDoorTypes(prev => prev.map(t => t.id === id ? { ...t, name, width } : t));
+    const { skipped } = reflowOpeningsOfType(true, id, width);
     setEditingDoorTypeId(null);
+    if (skipped > 0) window.alert(`${skipped} 個門因牆段太短，未套用新寬度`);
   }
 
   function handleDeleteDoorType(id) {
@@ -466,7 +486,9 @@ export default function App() {
 
   function handleEditWindowType(id, name, width) {
     setWindowTypes(prev => prev.map(t => t.id === id ? { ...t, name, width } : t));
+    const { skipped } = reflowOpeningsOfType(false, id, width);
     setEditingWindowTypeId(null);
+    if (skipped > 0) window.alert(`${skipped} 個窗因牆段太短，未套用新寬度`);
   }
 
   function handleDeleteWindowType(id) {
@@ -1117,14 +1139,24 @@ if (mode !== 'wall') setSnapIndicator(null);
     if (singleSel?.type === 'rawWall' && selWallObj) {
       if (selWallObj.isDoor || selWallObj.isWindow) {
         const isD = selWallObj.isDoor;
-        const t = (isD ? doorTypes : windowTypes).find(x => x.id === selWallObj.typeId);
+        const types = isD ? doorTypes : windowTypes;
         const span = Math.round(Math.hypot(selWallObj.ptB.x - selWallObj.ptA.x, selWallObj.ptB.y - selWallObj.ptA.y));
         return (
           <div>
             <div style={sectionTitleStyle}>{isD ? '門' : '窗'}</div>
-            <PropRow k="類型" v={t ? `${t.name}（寬 ${t.width}）` : '—'} />
+            <select value={selWallObj.typeId ?? ''} style={typeSelectStyle}
+              onChange={e => {
+                const nt = types.find(x => x.id === e.target.value);
+                if (!nt) return;
+                const r = reflowOpening(rawWalls, singleSel.idx, nt);
+                if (!r.ok) { window.alert('新寬度比牆段長，無法套用'); return; }
+                saveHistory();
+                setRawWalls(r.walls);
+              }}>
+              {types.map(x => <option key={x.id} value={x.id}>{x.name}（寬 {x.width}）</option>)}
+            </select>
             <PropRow k="開口寬" v={String(span)} />
-            <div style={noteStyle}>已放置的開口暫不支援換類型（幾何需重排）；點畫布上的雙箭頭可反轉方向</div>
+            <div style={noteStyle}>換類型會依新寬度重排開口；點畫布上的雙箭頭可反轉方向</div>
           </div>
         );
       }

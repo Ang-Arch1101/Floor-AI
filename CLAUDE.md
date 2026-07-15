@@ -46,7 +46,7 @@
   匯入 GAP 參數與匯出 scale 都需要單位/比例處理（最關鍵的下一關）
 - AutoCAD COM 寫回（pywin32，需 Windows + AutoCAD 實機）
 - 資料模型地基：物件穩定 id、專案檔 JSON 儲存/開啟、undo 納入類型表
-- 互動優化：性質面板長度直接輸入、改類型寬度套用到已放置開口（框選已完成）
+- 互動優化：牆長度圖面手調（面板輸入已否決）；改類型寬度套用到已放置開口 ✅、框選 ✅ 皆完成
 - 技術債：`localhost:5000` 寫死 → package.json proxy + 相對路徑（整合 PR #5 時一起）
 
 **目前分支：** `claude/window-selection-filtering-jnlgaq`（框選 + 篩選）
@@ -241,8 +241,8 @@ worldToScreen(wx, wy) → { x: wx*scale + offsetX, y: svgH - (wy*scale + offsetY
 - 斜牆支援：disabled（畫牆強制正交 `applyOrthoLock`；接合幾何是向量算的、理論上支援斜角但未測）
 - **per-wall thickness 已完成**（牆-牆/牆-柱/門窗）。唯二仍用全域 `THICKNESS` 的是「門窗開口的
   放置 click 容差」與「拖放 dead-zone」——屬互動容差、非接合幾何，影響小，暫留
-- 改既有門窗種類寬度 → 尚未套用到「已放置」的開口（需 `findOpeningGroup` 重算 ptA/ptB）。
-  目前只支援「新放置用選定寬度」
+- ✅ 改既有門窗種類寬度 → **已套用到「已放置」的開口**（`reflowOpening` 合回宿主牆再依同一中心重放；
+  塞不下者跳過並提示）；選取單一開口也能在性質面板換型別即重排
 - **匯出檔 re-import 時，門窗不會還原成開口**（parser 跳過 DOOR/WINDOW 圖層，只還原牆+柱）。
   要把開口還原回來屬「寄宿式資料模型」重構的範圍，暫緩。實際工作流是讀真實圖→改→匯出，
   少會 re-import 自己的匯出，影響小

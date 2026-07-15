@@ -133,6 +133,27 @@ function mergeOpening(walls, group) {
   return next;
 }
 
+// 把「已放置的開口」重排成新型別/寬度：合回宿主牆 → 用同一中心重放。
+// 回傳 { walls, ok }。ok=false 代表新寬度塞不下該牆段、開口保持原狀（walls 未動）。
+function reflowOpening(walls, objIdx, newOpeningType) {
+  const group = findOpeningGroup(walls, objIdx);
+  if (!group) return { walls, ok: true }; // 非開口三元組 → no-op
+  const opening = walls[objIdx];
+  const type = opening.isDoor ? 'door' : 'window';
+  const center = {
+    x: (opening.ptA.x + opening.ptB.x) / 2,
+    y: (opening.ptA.y + opening.ptB.y) / 2,
+  };
+  const merged = mergeOpening(walls, group);
+  const host = merged[group.leftIdx];
+  const hostLen = Math.hypot(host.end.x - host.start.x, host.end.y - host.start.y);
+  const width = newOpeningType?.width ?? opening.width;
+  // 溢出保護：塞不下就回傳原陣列，避免 placeOpening 的 early-return 把 merged 單牆回傳、吃掉開口
+  if (width >= hostLen) return { walls, ok: false };
+  const next = placeOpening(merged, group.leftIdx, center, type, opening.flipped, newOpeningType);
+  return { walls: next, ok: true };
+}
+
 function getColCorners(col) {
   const cw = col.w ?? COL_W;
   const ch = col.h ?? COL_H;
@@ -872,6 +893,7 @@ export {
   placeOpening,
   findOpeningGroup,
   mergeOpening,
+  reflowOpening,
   getColCorners,
   ptInCol,
   splitWallByColumns,
