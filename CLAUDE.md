@@ -34,22 +34,35 @@
 > `pair_walls`/`cluster_columns` 參數（牆厚 8–30、柱群聚 50）是針對測試圖調的，換真實圖很可能要重調，
 > 牆柱接合裁切也還沒驗。**確認前不要把 DXF 匯入當穩定功能。**
 
-**C. 框選 + 篩選（本分支）**
+**C. 框選 + 篩選（PR #8）**
 - **窗選 / 框選**：select 模式空白處拖曳起框，方向決定語意——左→右=窗選（完全框住才選，藍實框）、
   右→左=框選（碰到即選，綠虛框），對齊 AutoCAD 肌肉記憶；Ctrl 拖曳可累加選取
 - **篩選**：左側性質面板（select 閒置時）三個類別開關（牆／柱／門窗），控制框選抓哪些物件
 - 純幾何判定在 `geometry.js`（`boxSelect` + `pointInRect`/`rectsOverlap`/`segIntersectsRect`），
-  App.js 只做互動與矩形 overlay 渲染；新增 5 筆 `boxSelect` 測試（前端共 19 通過）
+  App.js 只做互動與矩形 overlay 渲染
+- **改門窗型別寬度套用到已放置開口**：`reflowOpening` 合回宿主牆再依同一中心重放，塞不下者跳過並提示；
+  選取單一開口也能在性質面板換型別即重排
+- 測試：前端共 23 通過（`boxSelect` +5、`reflowOpening` +4）
+
+**D. DXF 匯入前選圖層（本分支）**
+- 背景：使用者的真實圖面是 Revit 匯出的 DWG（需先轉 DXF），圖層數遠比 `test.dxf` 複雜——
+  標註/文字/剖面線/家具都可能跟牆柱線混在一起，不篩選會被 `pair_walls` 誤配成假牆
+- 匯入改兩段式：選檔案 → 後端 `scan_layers()` 只掃描各圖層線段數量（不辨識）→ 前端跳出圖層勾選
+  modal（預設全選，可全選/全不選）→ 確認後帶 `include_layers` 白名單再真正呼叫 `parse_dxf()` 辨識
+- 後端新增 `POST /api/scan-dxf-layers`；`parse_dxf(path, include_layers=None)` 加白名單參數，
+  `None` 時行為不變（向後相容，舊測試不受影響）
+- 測試：後端新增 2 筆（圖層計數、白名單過濾掉誤配的標註線），共 7 筆通過
+- ⚠️ **只吃 DXF，不支援 DWG**（ezdxf 讀不了私有二進位格式），Revit 使用者需先轉檔
+  （AutoCAD 另存 DXF，或本機用 ODA File Converter，避免圖面上傳到線上轉檔網站）
 
 ### 下一個（候選，待使用者選）
-- **DXF 匯入/匯出用真實圖面驗證** — 真實圖多為 mm 單位（牆厚 100–300），
-  匯入 GAP 參數與匯出 scale 都需要單位/比例處理（最關鍵的下一關）
+- **用真實 Revit 圖面實測匯入**（使用者手上已有 DWG，待轉出 DXF）——驗證圖層勾選 UI 好不好用、
+  真實圖多為 mm 單位（牆厚 100–300），匯入 GAP 參數與匯出 scale 可能仍需重調
 - AutoCAD COM 寫回（pywin32，需 Windows + AutoCAD 實機）
 - 資料模型地基：物件穩定 id、專案檔 JSON 儲存/開啟、undo 納入類型表
-- 互動優化：牆長度圖面手調（面板輸入已否決）；改類型寬度套用到已放置開口 ✅、框選 ✅ 皆完成
 - 技術債：`localhost:5000` 寫死 → package.json proxy + 相對路徑（整合 PR #5 時一起）
 
-**目前分支：** `claude/window-selection-filtering-jnlgaq`（框選 + 篩選）
+**目前分支：** `claude/window-selection-filtering-jnlgaq`（框選 + 篩選 + DXF 匯入前選圖層）
 
 ---
 
@@ -116,20 +129,29 @@
 
 ### 後端架構（`backend/`）
 - `app.py`：Flask
-  - `POST /api/upload-dxf`：接收 DXF，回傳 `{ walls, columns, raw_count, wall_count, col_count }`
+  - `POST /api/scan-dxf-layers`：接收 DXF，只掃描（不辨識）→ 回傳 `{ layers: [{name, count, color, linetype}] }`，
+    供前端「匯入前選圖層」面板列清單
+  - `POST /api/upload-dxf`：接收 DXF + 可選 `include_layers`（JSON 陣列字串，圖層白名單）→
+    回傳 `{ walls, columns, raw_count, wall_count, col_count }`；不帶 `include_layers` 沿用舊行為（不篩選）
   - `POST /api/export-dxf`：收 `{lines, arcs, scale?}` → ezdxf 產 R2010 DXF → 回傳檔案下載
     - 圖層：`WALL`（牆 + RC 柱同層，`LAYER_REMAP` 把 COL 併進 WALL）、`DOOR`、`WINDOW`
     - 門弧用 `DASHED` 線型（對齊畫面虛線）；`$INSUNITS=5`
 - `dxf_parser.py`：
-  - `parse_dxf(path)`：主流程，LINE/LWPOLYLINE → segments，配對牆 + 分群柱
+  - `scan_layers(path)`：列出每個圖層的 LINE/LWPOLYLINE 數量（不辨識），供匯入前選圖層 UI 用
+  - `parse_dxf(path, include_layers=None)`：主流程，LINE/LWPOLYLINE → segments，配對牆 + 分群柱
     - `DOOR`/`WINDOW` 圖層（`OPENING_LAYERS`）的線**不參與**牆/柱辨識——避免 round-trip 時
       窗框被誤判成柱（幻影柱）。一般 CAD 圖沒這些圖層名，不受影響
+    - `include_layers`：白名單時只有清單內圖層參與辨識（其餘線段整段跳過）；
+      **Revit 等軟體匯出常有十幾二十個圖層**（標註/文字/剖面線/家具），不篩選容易把標註線
+      誤配成牆——這是匯入前選圖層 UI 存在的原因
   - `pair_walls(segments)`：貪婪配對平行線段 → 牆 `{start:[x,y], end:[x,y], thickness}`，回傳 `(walls, leftover)`
   - `try_pair(a, b, ...)`：兩線段平行 + 間距∈[8,30] + 重疊≥50 → 一道牆（中心線 + 量到的厚度）
   - `cluster_columns(segments)`：union-find 依端點鄰近（<50）分群 → bounding box → 柱 `{cx,cy,w,h,angle}`
   - `detect_rect_from_lwpoly(entity)`：closed 4-頂點矩形 LWPOLYLINE → 柱
   - 參數常數：`GAP_MIN/MAX`（牆厚範圍）、`OVERLAP_MIN`、`CLUSTER_GAP`、`MAX_COL`
 - 測試檔：`test.dxf`（根目錄）— 4 牆 + 5 柱（含一根遠處孤立參考柱 x≈5070）
+- ⚠️ **只吃 DXF，不支援 DWG**（ezdxf 讀不了私有二進位格式）。Revit/AutoCAD 匯出的 DWG
+  需先轉檔（AutoCAD 另存 DXF，或用免費的 ODA File Converter 本機轉檔，避免上傳圖面到線上轉檔網站）
 
 ---
 
@@ -193,11 +215,16 @@
 - `window`：放窗（N 鍵），靠近牆自動吸附
 - `select`（ESC）：選取、拖曳、Delete 刪除；選取牆段顯示端點控制點
 
-### DXF 匯入（工具列「匯入 DXF」）
-- `<input type=file>` onChange → POST 到 backend → 取得 `data.walls` / `data.columns`
+### DXF 匯入（工具列「匯入 DXF」，兩段式：先選圖層再辨識）
+- 選檔案 → `handleDxfFileSelected` POST `/api/scan-dxf-layers`（只掃描，不辨識）→
+  開 `layerPicker` 圖層勾選面板（畫面正中 modal），預設全選
+- 面板按「確認匯入」→ `confirmDxfImport` 帶 `include_layers`（勾選的圖層名）POST `/api/upload-dxf`
+  → 取得 `data.walls` / `data.columns`（只有勾選圖層的線段參與牆/柱辨識）
 - 直接用 DXF 原始座標（不重新置中）：DXF 的 (0,0) 對齊世界原點十字，重複匯入會重疊
 - walls → rawWalls（用後端量到的 thickness）；columns → columns（用後端 bbox 的 w/h）
 - 匯入前 `saveHistory()`，可 Ctrl+Z 還原
+- 為什麼要兩段式：Revit 等軟體匯出常有十幾二十個圖層（標註/文字/剖面線/家具），
+  全部丟進去做「平行線配對成牆」容易把標註線誤配成牆——見 `dxf_parser.py` 的 `scan_layers`/`include_layers`
 
 ### 無限畫布（viewTransform）
 - 世界座標系：Y 朝上，`screenToWorld` / `worldToScreen` 換算

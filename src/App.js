@@ -234,6 +234,11 @@ export default function App() {
   const suppressClickRef = useRef(false); // 框選拖曳後抑制隨後的 handleClick
   // 框選篩選：哪些類別參與（牆/柱/門窗）
   const [selFilter, setSelFilter] = useState({ wall: true, column: true, opening: true });
+  // 匯入前選圖層：選檔案後先掃描圖層清單，使用者勾選要參與牆/柱辨識的圖層才真正匯入
+  // （Revit 等軟體匯出常有標註/文字/家具等圖層，不篩選容易誤判成牆或柱）
+  const [layerPicker, setLayerPicker] = useState(null); // { file, layers:[{name,count,color,linetype}] }
+  const [pickedLayers, setPickedLayers] = useState(() => new Set());
+  const [importBusy, setImportBusy] = useState(false);
   // 匯入 DXF 的來源圖層外觀（name→{color,linetype,lineweight}），匯出時放回同樣設定
   const [importedLayers, setImportedLayers] = useState(() => {
     try { return JSON.parse(localStorage.getItem('floorAI_importedLayers') ?? 'null') ?? []; } catch { return []; }
@@ -362,6 +367,71 @@ export default function App() {
       }
       return next;
     });
+  }
+
+  // 選檔案後先掃描圖層清單（不做辨識），開圖層選取面板；預設全選圖層。
+  async function handleDxfFileSelected(file) {
+    const fd = new FormData();
+    fd.append('file', file);
+    try {
+      const res = await fetch('http://localhost:5000/api/scan-dxf-layers', { method: 'POST', body: fd });
+      const data = await res.json();
+      if (data.error) { window.alert(`讀取圖層失敗：${data.error}`); return; }
+      const layers = data.layers ?? [];
+      setLayerPicker({ file, layers });
+      setPickedLayers(new Set(layers.map(L => L.name)));
+    } catch (err) {
+      window.alert('連線失敗（確認後端是否啟動）');
+    }
+  }
+
+  // 使用者在圖層面板勾好後按確認：只讓勾選的圖層參與牆/柱辨識，其餘流程與原本匯入相同。
+  async function confirmDxfImport() {
+    if (!layerPicker) return;
+    setImportBusy(true);
+    const fd = new FormData();
+    fd.append('file', layerPicker.file);
+    fd.append('include_layers', JSON.stringify([...pickedLayers]));
+    try {
+      const res = await fetch('http://localhost:5000/api/upload-dxf', { method: 'POST', body: fd });
+      const data = await res.json();
+      if (data.error) { window.alert(`DXF 匯入錯誤：${data.error}`); return; }
+      const walls = data.walls ?? [];
+      const cols = data.columns ?? [];
+      const newWalls = walls.map(w => ({
+        start: { x: w.start[0], y: w.start[1] },
+        end:   { x: w.end[0],   y: w.end[1] },
+        typeId: wallTypes[0]?.id,
+        thickness: w.thickness ?? wallTypes[0]?.thickness ?? THICKNESS,
+        layer: w.layer,
+      }));
+      const newCols = cols.map(c => ({
+        cx: c.cx,
+        cy: c.cy,
+        type: 'rc',
+        rotated: Math.abs(Math.sin(c.angle)) > 0.5,
+        typeId: colTypes[0]?.id,
+        w: c.w,
+        h: c.h,
+        layer: c.layer,
+      }));
+      saveHistory();
+      setRawWalls(prev => [...prev, ...newWalls]);
+      if (newCols.length > 0) setColumns(prev => [...prev, ...newCols]);
+      const srcLayers = data.layers ?? [];
+      if (srcLayers.length > 0) {
+        setImportedLayers(prev => {
+          const map = new Map(prev.map(L => [L.name, L]));
+          srcLayers.forEach(L => map.set(L.name, L));
+          return [...map.values()];
+        });
+      }
+      setLayerPicker(null);
+    } catch (err) {
+      window.alert('連線失敗（確認後端是否啟動）');
+    } finally {
+      setImportBusy(false);
+    }
   }
 
   function handleClear() {
@@ -1247,51 +1317,9 @@ if (mode !== 'wall') setSnapIndicator(null);
             匯入 DXF
             <input type="file" accept=".dxf" style={{ display: 'none' }} onChange={async e => {
               const file = e.target.files[0];
-              if (!file) return;
-              const fd = new FormData();
-              fd.append('file', file);
-              try {
-                const res = await fetch('http://localhost:5000/api/upload-dxf', { method: 'POST', body: fd });
-                const data = await res.json();
-                if (data.error) { console.error('DXF 匯入錯誤:', data.error); return; }
-                const walls = data.walls ?? [];
-                const cols = data.columns ?? [];
-                // 直接使用 DXF 原始座標（DXF 的 0,0 對齊世界原點十字）
-                // layer：記住來源 DXF 圖層，匯出時放回同一圖層（在 FloorAI 新畫的物件沒有 layer，用預設）
-                const newWalls = walls.map(w => ({
-                  start: { x: w.start[0], y: w.start[1] },
-                  end:   { x: w.end[0],   y: w.end[1] },
-                  typeId: wallTypes[0]?.id,
-                  thickness: w.thickness ?? wallTypes[0]?.thickness ?? THICKNESS,
-                  layer: w.layer,
-                }));
-                const newCols = cols.map(c => ({
-                  cx: c.cx,
-                  cy: c.cy,
-                  type: 'rc',
-                  rotated: Math.abs(Math.sin(c.angle)) > 0.5,
-                  typeId: colTypes[0]?.id,
-                  w: c.w,
-                  h: c.h,
-                  layer: c.layer,
-                }));
-                console.log(`DXF 匯入：${newWalls.length} 條牆、${newCols.length} 根柱`);
-                saveHistory();
-                setRawWalls(prev => [...prev, ...newWalls]);
-                if (newCols.length > 0) setColumns(prev => [...prev, ...newCols]);
-                // 記下來源圖層外觀（依 name 合併，新匯入覆蓋同名）
-                const srcLayers = data.layers ?? [];
-                if (srcLayers.length > 0) {
-                  setImportedLayers(prev => {
-                    const map = new Map(prev.map(L => [L.name, L]));
-                    srcLayers.forEach(L => map.set(L.name, L));
-                    return [...map.values()];
-                  });
-                }
-              } catch (err) {
-                console.error('連線失敗（確認後端是否啟動）:', err);
-              }
               e.target.value = '';
+              if (!file) return;
+              await handleDxfFileSelected(file);
             }} />
           </label>
           <button onClick={async () => {
@@ -1442,6 +1470,48 @@ if (mode !== 'wall') setSnapIndicator(null);
           }}
           onBlur={() => setEditingDim(null)}
         />
+      )}
+
+      {layerPicker && (
+        <div style={{ position: 'fixed', inset: 0, background: '#000000aa', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 30 }}>
+          <div style={{ background: '#161616', border: '1px solid #333', borderRadius: 8, padding: 16, width: 380, maxHeight: '70vh', display: 'flex', flexDirection: 'column' }}>
+            <div style={{ color: '#00d4aa', fontSize: 14, marginBottom: 4 }}>選擇要匯入的圖層</div>
+            <div style={{ color: '#666', fontSize: 11, marginBottom: 10, lineHeight: 1.5 }}>
+              只有勾選的圖層會參與牆/柱辨識；標註、文字、家具等圖層建議取消勾選，避免誤判。
+            </div>
+            <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+              <button onClick={() => setPickedLayers(new Set(layerPicker.layers.map(L => L.name)))}
+                style={{ ...panelBtnStyle, flex: 1 }}>全選</button>
+              <button onClick={() => setPickedLayers(new Set())}
+                style={{ ...panelBtnStyle, flex: 1 }}>全不選</button>
+            </div>
+            <div style={{ overflowY: 'auto', border: '1px solid #262626', borderRadius: 6 }}>
+              {layerPicker.layers.length === 0 && (
+                <div style={{ color: '#666', fontSize: 12, padding: 10 }}>這份圖沒有可辨識的線段圖層</div>
+              )}
+              {layerPicker.layers.map(L => (
+                <label key={L.name} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px', borderBottom: '1px solid #1e1e1e', cursor: 'pointer', fontSize: 12 }}>
+                  <input type="checkbox" checked={pickedLayers.has(L.name)}
+                    onChange={e => setPickedLayers(prev => {
+                      const next = new Set(prev);
+                      if (e.target.checked) next.add(L.name); else next.delete(L.name);
+                      return next;
+                    })} />
+                  <span style={{ color: '#ccc', flex: 1 }}>{L.name}</span>
+                  <span style={{ color: '#666' }}>{L.count} 條</span>
+                </label>
+              ))}
+            </div>
+            <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+              <button onClick={() => setLayerPicker(null)} disabled={importBusy}
+                style={{ ...panelBtnStyle, flex: 1 }}>取消</button>
+              <button onClick={confirmDxfImport} disabled={importBusy || pickedLayers.size === 0}
+                style={{ ...panelBtnStyle, flex: 1, background: pickedLayers.size === 0 ? '#1a1a1a' : '#00d4aa22', color: pickedLayers.size === 0 ? '#444' : '#00d4aa', borderColor: pickedLayers.size === 0 ? '#333' : '#00d4aa66' }}>
+                {importBusy ? '匯入中…' : `確認匯入（${pickedLayers.size}）`}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

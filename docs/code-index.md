@@ -15,27 +15,30 @@
 |------|------|------|
 | `EXPORT_LAYERS` | L13 | 匯出預設圖層與 ACI 顏色：WALL/DOOR/WINDOW |
 | `LAYER_REMAP` | L19 | `{COL: WALL}` — FloorAI 新畫的 RC 柱併入 WALL 圖層 |
-| `POST /api/upload-dxf` | L23 | 接收 `.dxf`，呼叫 `parse_dxf`，回傳 `{walls, columns, layers, ...}` |
-| `POST /api/export-dxf` | L54 | 收 `{lines, arcs, scale?, layers?}` → ezdxf R2010（`setup=True` 載標準線型）、`$INSUNITS=5` → 回傳檔案下載 |
-| `ensure_layer`（export 內） | L84 | 依需要建圖層：來源層套回 `layers` 傳來的顏色/線型/線寬（非標準線型退回 CONTINUOUS）；FloorAI 預設層配 ACI 色 |
-| `DASHED` 線型 + 門弧套用 | L78 / L120 | 門弧匯出成虛線，對齊畫面 `strokeDasharray` |
+| `POST /api/scan-dxf-layers` | L23 | 接收 `.dxf`，呼叫 `scan_layers`（只掃描不辨識），回傳 `{layers:[{name,count,color,linetype}]}` |
+| `POST /api/upload-dxf` | L47 | 接收 `.dxf` + 可選 `include_layers`（form 欄位，JSON 陣列字串），呼叫 `parse_dxf`，回傳 `{walls, columns, layers, ...}` |
+| `POST /api/export-dxf` | L88 | 收 `{lines, arcs, scale?, layers?}` → ezdxf R2010（`setup=True` 載標準線型）、`$INSUNITS=5` → 回傳檔案下載 |
+| `ensure_layer`（export 內） | export 內 | 依需要建圖層：來源層套回 `layers` 傳來的顏色/線型/線寬（非標準線型退回 CONTINUOUS）；FloorAI 預設層配 ACI 色 |
+| `DASHED` 線型 + 門弧套用 | export 內 | 門弧匯出成虛線，對齊畫面 `strokeDasharray` |
 
-### `backend/dxf_parser.py`（238 行）
+### `backend/dxf_parser.py`（~290 行）
 | 名稱 | 行號 | 說明 |
 |------|------|------|
 | 參數常數 `GAP_MIN/GAP_MAX/OVERLAP_MIN/CLUSTER_GAP/MAX_COL/PARALLEL_TOL` | L5–10 | 牆厚範圍、重疊下限、柱群聚距離、容差，都是針對 `test.dxf` 調的 |
 | `detect_rect_from_lwpoly(entity)` | L13 | closed 4-頂點矩形 LWPOLYLINE → 柱（帶來源 layer） |
 | `try_pair(a, b, ...)` | L39 | 兩線段平行 + 間距 8–30 + 重疊 ≥50 → 一道牆（中心線 + 厚度 + 取 a 的 layer） |
-| `pair_walls(segments)` | L84 | 貪婪配對平行線段成牆，回傳 `(walls, leftover)` |
+| `pair_walls(segments)` | L85 | 貪婪配對平行線段成牆，回傳 `(walls, leftover)` |
 | `cluster_columns(segments, ...)` | L108 | union-find 依端點鄰近（<50）分群 → bounding box 當柱；layer 取群內最多數 |
 | `OPENING_LAYERS` | L170 | `{DOOR, WINDOW}` — 這些圖層的線跳過牆/柱辨識（防幻影柱） |
-| `parse_dxf(file_path)` | L173 | 主流程：讀 LINE/LWPOLYLINE（每 segment 記 layer、跳過開口圖層）→ 配對牆 + 分群柱 |
-| `read_layer_table(doc)` | L220 | 讀來源圖層表 `[{name,color,linetype,lineweight}]`（跳過 0/Defpoints，負色正規化）|
+| `scan_layers(file_path)` | L173 | 匯入前掃描：列每個圖層的 LINE/LWPOLYLINE 數量（不辨識），供前端選圖層 UI |
+| `parse_dxf(file_path, include_layers=None)` | L204 | 主流程：讀 LINE/LWPOLYLINE（每 segment 記 layer、跳過開口圖層 + 白名單外圖層）→ 配對牆 + 分群柱；`include_layers=None` 沿用舊行為不篩選 |
+| `read_layer_table(doc)` | L257 | 讀來源圖層表 `[{name,color,linetype,lineweight}]`（跳過 0/Defpoints，負色正規化）|
 
 - 測試檔：根目錄 `test.dxf`（4 牆 + 5 柱）
-- 回歸測試：`backend/test_parser.py`（獨立 assert 腳本，`python test_parser.py`，5 個測試）——
-  幻影柱排除、來源圖層保留、圖層外觀讀取、關閉圖層負色正規化、test.dxf 正常匯入
+- 回歸測試：`backend/test_parser.py`（獨立 assert 腳本，`python test_parser.py`，7 個測試）——
+  幻影柱排除、來源圖層保留、圖層外觀讀取、關閉圖層負色正規化、圖層掃描計數、白名單過濾誤配、test.dxf 正常匯入
 - 依賴：`backend/requirements.txt`（`pip install -r requirements.txt`，`python app.py` 監聽 :5000）
+- ⚠️ 只吃 DXF，不支援 DWG（ezdxf 讀不了私有二進位格式）；Revit/AutoCAD 匯出的 DWG 需先轉檔
 
 ---
 
@@ -130,10 +133,13 @@ App.js 渲染管線與 DXF 匯出共用；`npm test` 直接對這裡斷言（`sr
   </div>
   狀態列：getHint()
   editingDim 輸入框（fixed）
+  layerPicker modal（fixed，畫面正中）：匯入前選圖層
 </div>
 ```
 - 「匯出 DXF」：`buildExportGeometry(rawWalls, columns)` + `importedLayers` → POST `/api/export-dxf` → blob 下載 `floorai.dxf`
-- 「匯入 DXF」：`<input type=file>` → POST `/api/upload-dxf` → walls/columns/layers 疊加進 state（可 Ctrl+Z）
+- 「匯入 DXF」（兩段式）：`<input type=file>` → `handleDxfFileSelected` POST `/api/scan-dxf-layers`
+  → 開 `layerPicker` modal（預設全選圖層）→ 確認 → `confirmDxfImport` 帶 `include_layers` POST
+  `/api/upload-dxf` → walls/columns/layers 疊加進 state（可 Ctrl+Z）
 
 ### 座標換算
 ```js

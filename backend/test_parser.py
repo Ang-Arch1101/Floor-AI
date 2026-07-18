@@ -9,7 +9,7 @@
 import os
 import tempfile
 import ezdxf
-from dxf_parser import parse_dxf
+from dxf_parser import parse_dxf, scan_layers
 
 
 def _box(msp, cx, cy, w, h, layer):
@@ -118,6 +118,61 @@ def test_off_layer_color_normalized():
     print("[OK] test_off_layer_color_normalized：關閉圖層負色正規化為 +3")
 
 
+def test_scan_layers_counts_geometry_per_layer():
+    """scan_layers 列出每個圖層的 LINE/LWPOLYLINE 數量，不做牆/柱辨識。"""
+    doc = ezdxf.new("R2010")
+    for name in ("A-WALL", "A-DIMS", "A-TEXT"):
+        doc.layers.add(name)
+    msp = doc.modelspace()
+    msp.add_line((0, 0), (200, 0), dxfattribs={"layer": "A-WALL"})
+    msp.add_line((0, 15), (200, 15), dxfattribs={"layer": "A-WALL"})
+    msp.add_line((0, 0), (0, 15), dxfattribs={"layer": "A-DIMS"})
+    # TEXT 實體不是 LINE/LWPOLYLINE，掃描不應計入
+    msp.add_text("hello", dxfattribs={"layer": "A-TEXT"})
+
+    with tempfile.NamedTemporaryFile(suffix=".dxf", delete=False) as tmp:
+        path = tmp.name
+    doc.saveas(path)
+    try:
+        layers = scan_layers(path)
+    finally:
+        os.unlink(path)
+
+    by_name = {L["name"]: L["count"] for L in layers}
+    assert by_name.get("A-WALL") == 2, by_name
+    assert by_name.get("A-DIMS") == 1, by_name
+    assert "A-TEXT" not in by_name, "TEXT 實體不應被計入圖層掃描"
+    print("[OK] test_scan_layers_counts_geometry_per_layer：圖層幾何數量正確、TEXT 被排除")
+
+
+def test_include_layers_filters_recognition():
+    """include_layers 白名單只讓指定圖層參與牆/柱辨識，其餘圖層的線被忽略。"""
+    doc = ezdxf.new("R2010")
+    for name in ("A-WALL", "A-DIMS"):
+        doc.layers.add(name)
+    msp = doc.modelspace()
+    # 真牆在 A-WALL
+    msp.add_line((0, 0), (200, 0), dxfattribs={"layer": "A-WALL"})
+    msp.add_line((0, 15), (200, 15), dxfattribs={"layer": "A-WALL"})
+    # 標註圖層剛好也有一對平行線，若不篩選會被誤配成第二道牆
+    msp.add_line((0, 50), (200, 50), dxfattribs={"layer": "A-DIMS"})
+    msp.add_line((0, 65), (200, 65), dxfattribs={"layer": "A-DIMS"})
+
+    with tempfile.NamedTemporaryFile(suffix=".dxf", delete=False) as tmp:
+        path = tmp.name
+    doc.saveas(path)
+    try:
+        unfiltered = parse_dxf(path)
+        filtered = parse_dxf(path, include_layers=["A-WALL"])
+    finally:
+        os.unlink(path)
+
+    assert unfiltered["wall_count"] == 2, "不篩選時應誤配出 2 道牆（含標註）"
+    assert filtered["wall_count"] == 1, filtered
+    assert filtered["walls"][0]["layer"] == "A-WALL", filtered["walls"][0]
+    print("[OK] test_include_layers_filters_recognition：白名單排除 A-DIMS，只剩 1 道真牆")
+
+
 def test_normal_import_unaffected():
     """test.dxf（無 DOOR/WINDOW 圖層）仍還原 4 牆 + 5 柱。"""
     test_dxf = os.path.join(os.path.dirname(__file__), "..", "test.dxf")
@@ -135,5 +190,7 @@ if __name__ == "__main__":
     test_source_layer_preserved()
     test_layer_appearance_captured()
     test_off_layer_color_normalized()
+    test_scan_layers_counts_geometry_per_layer()
+    test_include_layers_filters_recognition()
     test_normal_import_unaffected()
     print("=== 全部通過 ===")
