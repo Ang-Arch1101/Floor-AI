@@ -44,10 +44,20 @@ def scan_dxf_layers_route():
     return jsonify({"status": "ok", "layers": layers})
 
 
+def _parse_layer_list_field(name):
+    """從 form 讀取一個可選的圖層名清單欄位（JSON 陣列字串）。不存在或空字串回傳 None。"""
+    raw = request.form.get(name)
+    if not raw:
+        return None
+    return json.loads(raw)
+
+
 @app.route("/api/upload-dxf", methods=["POST"])
 def upload_dxf():
-    """include_layers（可選 form 欄位，JSON 陣列字串）：只讓白名單圖層參與牆/柱辨識，
-    通常是使用者在 /api/scan-dxf-layers 的圖層清單勾選後回傳。不帶則沿用舊行為（不篩選）。"""
+    """wall_layers / col_layers（可選 form 欄位，JSON 陣列字串）：圖層分角色——
+    wall_layers 圖層的線段只參與牆辨識，col_layers 圖層的線段只參與柱辨識，
+    避免牆轉角碎片被誤判成柱。兩者皆不帶則沿用舊行為（不分角色、共用辨識池）。
+    通常是使用者在 /api/scan-dxf-layers 的圖層清單勾選/標記角色後回傳。"""
     if "file" not in request.files:
         return jsonify({"error": "no file"}), 400
 
@@ -55,20 +65,18 @@ def upload_dxf():
     if not f.filename.lower().endswith(".dxf"):
         return jsonify({"error": "not a dxf file"}), 400
 
-    include_layers = None
-    raw = request.form.get("include_layers")
-    if raw:
-        try:
-            include_layers = json.loads(raw)
-        except ValueError:
-            return jsonify({"error": "invalid include_layers"}), 400
+    try:
+        wall_layers = _parse_layer_list_field("wall_layers")
+        col_layers = _parse_layer_list_field("col_layers")
+    except ValueError:
+        return jsonify({"error": "invalid wall_layers/col_layers"}), 400
 
     with tempfile.NamedTemporaryFile(suffix=".dxf", delete=False) as tmp:
         f.save(tmp.name)
         tmp_path = tmp.name
 
     try:
-        result = parse_dxf(tmp_path, include_layers=include_layers)
+        result = parse_dxf(tmp_path, wall_layers=wall_layers, col_layers=col_layers)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     finally:

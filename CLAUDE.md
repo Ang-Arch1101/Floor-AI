@@ -44,20 +44,29 @@
   選取單一開口也能在性質面板換型別即重排
 - 測試：前端共 23 通過（`boxSelect` +5、`reflowOpening` +4）
 
-**D. DXF 匯入前選圖層（本分支）**
-- 背景：使用者的真實圖面是 Revit 匯出的 DWG（需先轉 DXF），圖層數遠比 `test.dxf` 複雜——
-  標註/文字/剖面線/家具都可能跟牆柱線混在一起，不篩選會被 `pair_walls` 誤配成假牆
-- 匯入改兩段式：選檔案 → 後端 `scan_layers()` 只掃描各圖層線段數量（不辨識）→ 前端跳出圖層勾選
-  modal（預設全選，可全選/全不選）→ 確認後帶 `include_layers` 白名單再真正呼叫 `parse_dxf()` 辨識
-- 後端新增 `POST /api/scan-dxf-layers`；`parse_dxf(path, include_layers=None)` 加白名單參數，
-  `None` 時行為不變（向後相容，舊測試不受影響）
-- 測試：後端新增 2 筆（圖層計數、白名單過濾掉誤配的標註線），共 7 筆通過
+**D. DXF 匯入前選圖層 + 圖層分角色（本分支，含真實 Revit 圖面實測）**
+- 背景：使用者的真實圖面是 Revit 匯出的 DWG（先用 ODA File Converter 轉 DXF），圖層數遠比
+  `test.dxf` 複雜——標註/文字/剖面線/家具都可能跟牆柱線混在一起，不篩選會被 `pair_walls` 誤配成假牆
+- 匯入改兩段式：選檔案 → 後端 `scan_layers()` 只掃描各圖層線段數量（不辨識）→ 前端跳出圖層標記
+  面板（依圖層名稱關鍵字猜測預選牆/柱角色，仍可手動調整）→ 確認後帶 `wall_layers`/`col_layers`
+  兩個白名單再真正呼叫 `parse_dxf()` 辨識
+- **真實圖實測發現「幻影柱」新成因並修正**：只勾牆圖層（不含任何柱圖層）去跑，牆轉角/T 型交接
+  配不出來的碎片被 `cluster_columns` 誤判成 23 根假柱——`test.dxf` 因為牆都是簡單獨立線段、
+  沒有轉角複雜度，從未暴露這個問題。**修正：圖層分角色**——`parse_dxf(path, wall_layers, col_layers)`
+  牆圖層的線只餵 `pair_walls`、柱圖層的線只餵 `cluster_columns`，牆配對剩餘的碎片直接丟棄、
+  不會流入柱辨識（`wall_layers`/`col_layers` 皆為 `None` 時沿用舊版共用池行為，向後相容）
+- **真實圖其餘實測結果**：`$INSUNITS=5`（公分，跟 FloorAI 慣例一致，不用轉換單位）；牆厚中位數
+  17cm，落在既有 `GAP_MIN=8/GAP_MAX=30` 內不用重調；柱圖層標對後乾淨辨識出 26 根柱（65~90cm
+  方柱，無雜訊）；6331 條線完全不篩選硬跑約 20 秒（能接受，但沒有進度條會像卡住）
+- 後端新增 `POST /api/scan-dxf-layers`；`_collect_geometry()` 抽出共用的實體收集邏輯，
+  `parse_dxf()` 依是否傳入 `wall_layers`/`col_layers` 走「共用池」或「分角色」兩條路徑
+- 測試：後端新增 4 筆（圖層計數、白名單過濾誤配標註、柱圖層白名單排除家具方框、
+  **牆角碎片不再誤判成柱的迴歸測試**——直接對照真實圖發現的問題），共 9 筆通過
 - ⚠️ **只吃 DXF，不支援 DWG**（ezdxf 讀不了私有二進位格式），Revit 使用者需先轉檔
   （AutoCAD 另存 DXF，或本機用 ODA File Converter，避免圖面上傳到線上轉檔網站）
+- ⚠️ 圖層角色猜測（關鍵字 `wall`/`牆`/`墙`、`col`/`柱`）只是預填方便，不保證準，使用者仍需確認
 
 ### 下一個（候選，待使用者選）
-- **用真實 Revit 圖面實測匯入**（使用者手上已有 DWG，待轉出 DXF）——驗證圖層勾選 UI 好不好用、
-  真實圖多為 mm 單位（牆厚 100–300），匯入 GAP 參數與匯出 scale 可能仍需重調
 - AutoCAD COM 寫回（pywin32，需 Windows + AutoCAD 實機）
 - 資料模型地基：物件穩定 id、專案檔 JSON 儲存/開啟、undo 納入類型表
 - 技術債：`localhost:5000` 寫死 → package.json proxy + 相對路徑（整合 PR #5 時一起）

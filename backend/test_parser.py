@@ -145,8 +145,8 @@ def test_scan_layers_counts_geometry_per_layer():
     print("[OK] test_scan_layers_counts_geometry_per_layer：圖層幾何數量正確、TEXT 被排除")
 
 
-def test_include_layers_filters_recognition():
-    """include_layers 白名單只讓指定圖層參與牆/柱辨識，其餘圖層的線被忽略。"""
+def test_wall_layers_filters_recognition():
+    """wall_layers 只讓指定圖層的線參與牆辨識，其餘圖層的線被忽略。"""
     doc = ezdxf.new("R2010")
     for name in ("A-WALL", "A-DIMS"):
         doc.layers.add(name)
@@ -163,14 +163,67 @@ def test_include_layers_filters_recognition():
     doc.saveas(path)
     try:
         unfiltered = parse_dxf(path)
-        filtered = parse_dxf(path, include_layers=["A-WALL"])
+        filtered = parse_dxf(path, wall_layers=["A-WALL"])
     finally:
         os.unlink(path)
 
     assert unfiltered["wall_count"] == 2, "不篩選時應誤配出 2 道牆（含標註）"
     assert filtered["wall_count"] == 1, filtered
     assert filtered["walls"][0]["layer"] == "A-WALL", filtered["walls"][0]
-    print("[OK] test_include_layers_filters_recognition：白名單排除 A-DIMS，只剩 1 道真牆")
+    print("[OK] test_wall_layers_filters_recognition：白名單排除 A-DIMS，只剩 1 道真牆")
+
+
+def test_col_layers_recognizes_only_tagged_layer():
+    """col_layers 只讓指定圖層的線參與柱辨識；長得像柱的其他圖層方框不會被當成柱。"""
+    doc = ezdxf.new("R2010")
+    for name in ("S-COL", "A-FURN"):
+        doc.layers.add(name)
+    msp = doc.modelspace()
+    _box(msp, 100, 100, 30, 30, "S-COL")   # 真柱
+    _box(msp, 300, 300, 40, 40, "A-FURN")  # 家具方框，長得像柱但不該被當柱
+
+    with tempfile.NamedTemporaryFile(suffix=".dxf", delete=False) as tmp:
+        path = tmp.name
+    doc.saveas(path)
+    try:
+        res = parse_dxf(path, col_layers=["S-COL"])
+    finally:
+        os.unlink(path)
+
+    assert res["col_count"] == 1, res
+    assert abs(res["columns"][0]["cx"] - 100) < 1, res["columns"][0]
+    print("[OK] test_col_layers_recognizes_only_tagged_layer：只認 S-COL 的柱，排除 A-FURN 方框")
+
+
+def test_role_separated_excludes_wall_leftover_from_columns():
+    """圖層分角色（wall_layers/col_layers）：牆轉角配不出來的碎片不會被誤判成柱。
+
+    對照真實 Revit 匯出圖的實測結果——即使只勾「牆」這一個圖層（不含任何柱圖層），
+    舊版共用辨識池會把牆角/T 型交接的殘段誤判成假柱；圖層分角色從根本避免這件事：
+    wall_layers 的線只餵給 pair_walls，配不出來的碎片直接丟棄，不會流進 cluster_columns。
+    """
+    doc = ezdxf.new("R2010")
+    doc.layers.add("WALL")
+    msp = doc.modelspace()
+    msp.add_line((0, 0), (200, 0), dxfattribs={"layer": "WALL"})
+    msp.add_line((0, 15), (200, 15), dxfattribs={"layer": "WALL"})
+    # 配不出對的牆角碎片（模擬真實圖轉角/T 型交接留下的殘段，斜線讓 bbox 同時有寬有高）
+    msp.add_line((200, 0), (215, 20), dxfattribs={"layer": "WALL"})
+
+    with tempfile.NamedTemporaryFile(suffix=".dxf", delete=False) as tmp:
+        path = tmp.name
+    doc.saveas(path)
+    try:
+        legacy = parse_dxf(path)  # 舊版共用池：碎片會被誤判成柱
+        role = parse_dxf(path, wall_layers=["WALL"])  # 圖層分角色：柱一律 0
+    finally:
+        os.unlink(path)
+
+    assert legacy["wall_count"] == 1 and legacy["col_count"] == 1, \
+        f"對照組：舊版應把牆角碎片誤判成 1 根假柱，實際 {legacy}"
+    assert role["wall_count"] == 1 and role["col_count"] == 0, \
+        f"圖層分角色：碎片不該進柱辨識，實際 {role}"
+    print("[OK] test_role_separated_excludes_wall_leftover_from_columns：碎片不再誤判成柱")
 
 
 def test_normal_import_unaffected():
@@ -191,6 +244,8 @@ if __name__ == "__main__":
     test_layer_appearance_captured()
     test_off_layer_color_normalized()
     test_scan_layers_counts_geometry_per_layer()
-    test_include_layers_filters_recognition()
+    test_wall_layers_filters_recognition()
+    test_col_layers_recognizes_only_tagged_layer()
+    test_role_separated_excludes_wall_leftover_from_columns()
     test_normal_import_unaffected()
     print("=== 全部通過 ===")

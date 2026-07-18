@@ -234,10 +234,12 @@ export default function App() {
   const suppressClickRef = useRef(false); // 框選拖曳後抑制隨後的 handleClick
   // 框選篩選：哪些類別參與（牆/柱/門窗）
   const [selFilter, setSelFilter] = useState({ wall: true, column: true, opening: true });
-  // 匯入前選圖層：選檔案後先掃描圖層清單，使用者勾選要參與牆/柱辨識的圖層才真正匯入
-  // （Revit 等軟體匯出常有標註/文字/家具等圖層，不篩選容易誤判成牆或柱）
+  // 匯入前選圖層：選檔案後先掃描圖層清單，使用者把圖層標成「牆」或「柱」角色才真正匯入
+  // （Revit 等軟體匯出常有標註/文字/家具等圖層，不篩選容易誤判成牆或柱；
+  //  牆/柱分開兩個角色是因為牆轉角配不出來的碎片如果跟柱共用辨識池，會被誤判成假柱——實測過真實圖）
   const [layerPicker, setLayerPicker] = useState(null); // { file, layers:[{name,count,color,linetype}] }
-  const [pickedLayers, setPickedLayers] = useState(() => new Set());
+  const [wallLayers, setWallLayers] = useState(() => new Set());
+  const [colLayers, setColLayers] = useState(() => new Set());
   const [importBusy, setImportBusy] = useState(false);
   // 匯入 DXF 的來源圖層外觀（name→{color,linetype,lineweight}），匯出時放回同樣設定
   const [importedLayers, setImportedLayers] = useState(() => {
@@ -369,7 +371,15 @@ export default function App() {
     });
   }
 
-  // 選檔案後先掃描圖層清單（不做辨識），開圖層選取面板；預設全選圖層。
+  // 依圖層名猜角色（牆/柱），只是預填、使用者仍可自行調整——不保證準，僅省一點手動勾選的力氣。
+  function guessLayerRole(name) {
+    const lower = name.toLowerCase();
+    const wall = ['wall', '牆', '墙'].some(k => lower.includes(k));
+    const col = ['col', '柱'].some(k => lower.includes(k));
+    return { wall, col };
+  }
+
+  // 選檔案後先掃描圖層清單（不做辨識），開圖層選取面板；依名稱猜測預先勾選牆/柱角色。
   async function handleDxfFileSelected(file) {
     const fd = new FormData();
     fd.append('file', file);
@@ -379,19 +389,28 @@ export default function App() {
       if (data.error) { window.alert(`讀取圖層失敗：${data.error}`); return; }
       const layers = data.layers ?? [];
       setLayerPicker({ file, layers });
-      setPickedLayers(new Set(layers.map(L => L.name)));
+      const wSet = new Set(), cSet = new Set();
+      layers.forEach(L => {
+        const guess = guessLayerRole(L.name);
+        if (guess.wall) wSet.add(L.name);
+        if (guess.col) cSet.add(L.name);
+      });
+      setWallLayers(wSet);
+      setColLayers(cSet);
     } catch (err) {
       window.alert('連線失敗（確認後端是否啟動）');
     }
   }
 
-  // 使用者在圖層面板勾好後按確認：只讓勾選的圖層參與牆/柱辨識，其餘流程與原本匯入相同。
+  // 使用者在圖層面板標好牆/柱角色後按確認：wallLayers 圖層只參與牆辨識、
+  // colLayers 圖層只參與柱辨識（牆轉角配不出來的碎片不會流入柱辨識），其餘流程與原本匯入相同。
   async function confirmDxfImport() {
     if (!layerPicker) return;
     setImportBusy(true);
     const fd = new FormData();
     fd.append('file', layerPicker.file);
-    fd.append('include_layers', JSON.stringify([...pickedLayers]));
+    fd.append('wall_layers', JSON.stringify([...wallLayers]));
+    fd.append('col_layers', JSON.stringify([...colLayers]));
     try {
       const res = await fetch('http://localhost:5000/api/upload-dxf', { method: 'POST', body: fd });
       const data = await res.json();
@@ -1474,40 +1493,58 @@ if (mode !== 'wall') setSnapIndicator(null);
 
       {layerPicker && (
         <div style={{ position: 'fixed', inset: 0, background: '#000000aa', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 30 }}>
-          <div style={{ background: '#161616', border: '1px solid #333', borderRadius: 8, padding: 16, width: 380, maxHeight: '70vh', display: 'flex', flexDirection: 'column' }}>
-            <div style={{ color: '#00d4aa', fontSize: 14, marginBottom: 4 }}>選擇要匯入的圖層</div>
+          <div style={{ background: '#161616', border: '1px solid #333', borderRadius: 8, padding: 16, width: 460, maxHeight: '70vh', display: 'flex', flexDirection: 'column' }}>
+            <div style={{ color: '#00d4aa', fontSize: 14, marginBottom: 4 }}>標記圖層角色（牆／柱）</div>
             <div style={{ color: '#666', fontSize: 11, marginBottom: 10, lineHeight: 1.5 }}>
-              只有勾選的圖層會參與牆/柱辨識；標註、文字、家具等圖層建議取消勾選，避免誤判。
+              牆圖層只參與牆辨識、柱圖層只參與柱辨識，兩者分開——牆轉角配不出來的碎片才不會被誤判成柱。
+              標註、文字、家具等圖層兩者都不要勾。已依圖層名稱猜測預選，仍請確認再匯入。
             </div>
             <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-              <button onClick={() => setPickedLayers(new Set(layerPicker.layers.map(L => L.name)))}
-                style={{ ...panelBtnStyle, flex: 1 }}>全選</button>
-              <button onClick={() => setPickedLayers(new Set())}
-                style={{ ...panelBtnStyle, flex: 1 }}>全不選</button>
+              <button onClick={() => { setWallLayers(new Set()); setColLayers(new Set()); }}
+                style={{ ...panelBtnStyle, flex: 1 }}>全部清空</button>
+            </div>
+            <div style={{ display: 'flex', padding: '2px 8px', fontSize: 11, color: '#666' }}>
+              <span style={{ flex: 1 }}>圖層</span>
+              <span style={{ width: 40, textAlign: 'center' }}>牆</span>
+              <span style={{ width: 40, textAlign: 'center' }}>柱</span>
+              <span style={{ width: 50, textAlign: 'right' }}>線段</span>
             </div>
             <div style={{ overflowY: 'auto', border: '1px solid #262626', borderRadius: 6 }}>
               {layerPicker.layers.length === 0 && (
                 <div style={{ color: '#666', fontSize: 12, padding: 10 }}>這份圖沒有可辨識的線段圖層</div>
               )}
               {layerPicker.layers.map(L => (
-                <label key={L.name} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px', borderBottom: '1px solid #1e1e1e', cursor: 'pointer', fontSize: 12 }}>
-                  <input type="checkbox" checked={pickedLayers.has(L.name)}
-                    onChange={e => setPickedLayers(prev => {
-                      const next = new Set(prev);
-                      if (e.target.checked) next.add(L.name); else next.delete(L.name);
-                      return next;
-                    })} />
-                  <span style={{ color: '#ccc', flex: 1 }}>{L.name}</span>
-                  <span style={{ color: '#666' }}>{L.count} 條</span>
-                </label>
+                <div key={L.name} style={{ display: 'flex', alignItems: 'center', padding: '6px 8px', borderBottom: '1px solid #1e1e1e', fontSize: 12 }}>
+                  <span style={{ color: '#ccc', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{L.name}</span>
+                  <span style={{ width: 40, textAlign: 'center' }}>
+                    <input type="checkbox" checked={wallLayers.has(L.name)}
+                      onChange={e => setWallLayers(prev => {
+                        const next = new Set(prev);
+                        if (e.target.checked) next.add(L.name); else next.delete(L.name);
+                        return next;
+                      })} />
+                  </span>
+                  <span style={{ width: 40, textAlign: 'center' }}>
+                    <input type="checkbox" checked={colLayers.has(L.name)}
+                      onChange={e => setColLayers(prev => {
+                        const next = new Set(prev);
+                        if (e.target.checked) next.add(L.name); else next.delete(L.name);
+                        return next;
+                      })} />
+                  </span>
+                  <span style={{ width: 50, textAlign: 'right', color: '#666' }}>{L.count}</span>
+                </div>
               ))}
             </div>
             <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
               <button onClick={() => setLayerPicker(null)} disabled={importBusy}
                 style={{ ...panelBtnStyle, flex: 1 }}>取消</button>
-              <button onClick={confirmDxfImport} disabled={importBusy || pickedLayers.size === 0}
-                style={{ ...panelBtnStyle, flex: 1, background: pickedLayers.size === 0 ? '#1a1a1a' : '#00d4aa22', color: pickedLayers.size === 0 ? '#444' : '#00d4aa', borderColor: pickedLayers.size === 0 ? '#333' : '#00d4aa66' }}>
-                {importBusy ? '匯入中…' : `確認匯入（${pickedLayers.size}）`}
+              <button onClick={confirmDxfImport} disabled={importBusy || (wallLayers.size === 0 && colLayers.size === 0)}
+                style={{ ...panelBtnStyle, flex: 1,
+                  background: (wallLayers.size === 0 && colLayers.size === 0) ? '#1a1a1a' : '#00d4aa22',
+                  color: (wallLayers.size === 0 && colLayers.size === 0) ? '#444' : '#00d4aa',
+                  borderColor: (wallLayers.size === 0 && colLayers.size === 0) ? '#333' : '#00d4aa66' }}>
+                {importBusy ? '匯入中…' : `確認匯入（牆${wallLayers.size}・柱${colLayers.size}）`}
               </button>
             </div>
           </div>
