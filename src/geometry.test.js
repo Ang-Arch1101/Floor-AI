@@ -6,7 +6,9 @@ import {
   getWallGaps,
   clipStubEnd,
   placeOpening,
+  reflowOpening,
   splitEdgeByGaps,
+  boxSelect,
   buildExportGeometry,
 } from './geometry';
 
@@ -146,5 +148,91 @@ describe('DXF 匯出組裝（buildExportGeometry）', () => {
     expect(lines.some(l => l.layer === 'WALL')).toBe(true);     // 新畫牆用預設
     expect(lines.some(l => l.layer === 'A-COL')).toBe(true);    // 匯入柱放回來源層
     expect(lines.every(l => l.layer !== 'COL')).toBe(true);     // 這批柱都有來源層，不會是預設 COL
+  });
+});
+
+describe('框選 boxSelect', () => {
+  const walls = [
+    wall(0, 0, 100, 0),      // idx 0：完全在小框內
+    wall(200, 0, 300, 0),    // idx 1：在框外
+    wall(50, 0, 250, 0),     // idx 2：橫跨框邊界
+  ];
+  const cols = [
+    { cx: 50, cy: 50, type: 'rc', rotated: false, w: 20, h: 20 },   // idx 0：在框內
+    { cx: 400, cy: 50, type: 'rc', rotated: false, w: 20, h: 20 },  // idx 1：框外
+  ];
+  const rect = { minX: -10, minY: -10, maxX: 150, maxY: 100 };
+
+  test('窗選（window）：只選完全被框住的牆', () => {
+    const sel = boxSelect(walls, [], rect, 'window');
+    const idxs = sel.filter(s => s.type === 'rawWall').map(s => s.idx);
+    expect(idxs).toContain(0);    // 完全在內
+    expect(idxs).not.toContain(1); // 框外
+    expect(idxs).not.toContain(2); // 跨邊界（端點在框外）→ 窗選不選
+  });
+
+  test('框選（crossing）：碰到邊界的牆也選', () => {
+    const sel = boxSelect(walls, [], rect, 'crossing');
+    const idxs = sel.filter(s => s.type === 'rawWall').map(s => s.idx);
+    expect(idxs).toContain(0);
+    expect(idxs).toContain(2);     // 跨邊界 → crossing 會選
+    expect(idxs).not.toContain(1);
+  });
+
+  test('柱：窗選要整顆在框內', () => {
+    const sel = boxSelect([], cols, rect, 'window');
+    expect(sel).toEqual([{ type: 'col', idx: 0 }]);
+  });
+
+  test('篩選：關閉牆 → 框選結果不含牆', () => {
+    const sel = boxSelect(walls, cols, rect, 'crossing', { wall: false, column: true, opening: true });
+    expect(sel.some(s => s.type === 'rawWall')).toBe(false);
+    expect(sel.some(s => s.type === 'col')).toBe(true);
+  });
+
+  test('篩選：門窗類別獨立於牆', () => {
+    const opening = { isWindow: true, ptA: { x: 40, y: 0 }, ptB: { x: 60, y: 0 }, typeId: 'nt1' };
+    const sel = boxSelect([opening], [], rect, 'window', { wall: false, column: false, opening: true });
+    expect(sel).toEqual([{ type: 'rawWall', idx: 0 }]);
+  });
+});
+
+describe('reflowOpening 開口重排', () => {
+  // 在 0..300 的牆上放一扇寬 width 的窗，回傳三元組 [左段, 開口, 右段]
+  const build = (width) =>
+    placeOpening([wall(0, 0, 300, 0)], 0, { x: 150, y: 0 }, 'window', false, { id: 'nt1', width });
+  const span = (op) => Math.hypot(op.ptB.x - op.ptA.x, op.ptB.y - op.ptA.y);
+
+  test('加寬：跨距=新寬、中心不變、三元組長度不變、ok', () => {
+    const r = reflowOpening(build(80), 1, { id: 'nt1', width: 120 });
+    expect(r.ok).toBe(true);
+    expect(r.walls).toHaveLength(3);
+    const op = r.walls[1];
+    expect(span(op)).toBeCloseTo(120);
+    expect((op.ptA.x + op.ptB.x) / 2).toBeCloseTo(150); // 中心不變
+    expect(op.width).toBeCloseTo(120);
+  });
+
+  test('縮窄：開口變窄、兩側牆段變長', () => {
+    const r = reflowOpening(build(80), 1, { id: 'nt1', width: 40 });
+    expect(r.ok).toBe(true);
+    expect(span(r.walls[1])).toBeCloseTo(40);
+    const leftLen = Math.hypot(r.walls[0].end.x - r.walls[0].start.x, r.walls[0].end.y - r.walls[0].start.y);
+    expect(leftLen).toBeCloseTo(130); // 150 - 40/2
+  });
+
+  test('溢出（新寬 >= 宿主段長）：回傳原 walls、ok:false、開口未被吃掉', () => {
+    const walls = build(80);
+    const r = reflowOpening(walls, 1, { id: 'nt1', width: 300 });
+    expect(r.ok).toBe(false);
+    expect(r.walls).toBe(walls);        // 原陣列未動
+    expect(r.walls[1].isWindow).toBe(true);
+  });
+
+  test('傳入非開口 index → no-op、ok', () => {
+    const walls = build(80);
+    const r = reflowOpening(walls, 0, { id: 'nt1', width: 120 });
+    expect(r.ok).toBe(true);
+    expect(r.walls).toBe(walls);
   });
 });

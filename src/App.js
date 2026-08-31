@@ -21,6 +21,7 @@ import {
   placeOpening,
   findOpeningGroup,
   mergeOpening,
+  reflowOpening,
   getColCorners,
   ptInCol,
   splitWallByColumns,
@@ -32,6 +33,7 @@ import {
   computeAllMiters,
   computeWallDragInfo,
   clipStubEnd,
+  boxSelect,
   buildExportGeometry,
 } from './geometry';
 
@@ -226,6 +228,19 @@ export default function App() {
   const [viewTransform, setViewTransform] = useState({ scale: 1, offsetX: 0, offsetY: 0 });
   const [panning, setPanning] = useState(null);
   const [endpointDrag, setEndpointDrag] = useState(null);
+  // 框選：mousedown 空白處起框，mousemove 更新，mouseup 結算選取
+  const [marquee, setMarquee] = useState(null); // { startRaw:{x,y}, curRaw:{x,y} } 世界座標
+  const marqueeRef = useRef(null);
+  const suppressClickRef = useRef(false); // 框選拖曳後抑制隨後的 handleClick
+  // 框選篩選：哪些類別參與（牆/柱/門窗）
+  const [selFilter, setSelFilter] = useState({ wall: true, column: true, opening: true });
+  // 匯入前選圖層：選檔案後先掃描圖層清單，使用者把圖層標成「牆」或「柱」角色才真正匯入
+  // （Revit 等軟體匯出常有標註/文字/家具等圖層，不篩選容易誤判成牆或柱；
+  //  牆/柱分開兩個角色是因為牆轉角配不出來的碎片如果跟柱共用辨識池，會被誤判成假柱——實測過真實圖）
+  const [layerPicker, setLayerPicker] = useState(null); // { file, layers:[{name,count,color,linetype}] }
+  const [wallLayers, setWallLayers] = useState(() => new Set());
+  const [colLayers, setColLayers] = useState(() => new Set());
+  const [importBusy, setImportBusy] = useState(false);
   // 匯入 DXF 的來源圖層外觀（name→{color,linetype,lineweight}），匯出時放回同樣設定
   const [importedLayers, setImportedLayers] = useState(() => {
     try { return JSON.parse(localStorage.getItem('floorAI_importedLayers') ?? 'null') ?? []; } catch { return []; }
@@ -275,6 +290,7 @@ export default function App() {
       const tag = e.target.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
       if (e.key === 'Escape') {
+        if (marquee) { setMarquee(null); marqueeRef.current = null; return; }
         if (mode === 'select') { setSelected([]); }
         else if (mode === 'wall' && startPt) { setStartPt(null); }
         else if (suspended) { setSuspended(false); setStartPt(null); setSelected([]); setMode('select'); }
@@ -300,7 +316,7 @@ export default function App() {
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected, singleSel, mode, suspended, startPt, rawWalls, columns, history, future]);
+  }, [selected, singleSel, mode, suspended, startPt, rawWalls, columns, history, future, marquee]);
 
   useEffect(() => {
     localStorage.setItem('floorAI_rawWalls', JSON.stringify(rawWalls));
@@ -353,6 +369,88 @@ export default function App() {
       }
       return next;
     });
+  }
+
+  // 依圖層名猜角色（牆/柱），只是預填、使用者仍可自行調整——不保證準，僅省一點手動勾選的力氣。
+  function guessLayerRole(name) {
+    const lower = name.toLowerCase();
+    const wall = ['wall', '牆', '墙'].some(k => lower.includes(k));
+    const col = ['col', '柱'].some(k => lower.includes(k));
+    return { wall, col };
+  }
+
+  // 選檔案後先掃描圖層清單（不做辨識），開圖層選取面板；依名稱猜測預先勾選牆/柱角色。
+  async function handleDxfFileSelected(file) {
+    const fd = new FormData();
+    fd.append('file', file);
+    try {
+      const res = await fetch('http://localhost:5000/api/scan-dxf-layers', { method: 'POST', body: fd });
+      const data = await res.json();
+      if (data.error) { window.alert(`讀取圖層失敗：${data.error}`); return; }
+      const layers = data.layers ?? [];
+      setLayerPicker({ file, layers });
+      const wSet = new Set(), cSet = new Set();
+      layers.forEach(L => {
+        const guess = guessLayerRole(L.name);
+        if (guess.wall) wSet.add(L.name);
+        if (guess.col) cSet.add(L.name);
+      });
+      setWallLayers(wSet);
+      setColLayers(cSet);
+    } catch (err) {
+      window.alert('連線失敗（確認後端是否啟動）');
+    }
+  }
+
+  // 使用者在圖層面板標好牆/柱角色後按確認：wallLayers 圖層只參與牆辨識、
+  // colLayers 圖層只參與柱辨識（牆轉角配不出來的碎片不會流入柱辨識），其餘流程與原本匯入相同。
+  async function confirmDxfImport() {
+    if (!layerPicker) return;
+    setImportBusy(true);
+    const fd = new FormData();
+    fd.append('file', layerPicker.file);
+    fd.append('wall_layers', JSON.stringify([...wallLayers]));
+    fd.append('col_layers', JSON.stringify([...colLayers]));
+    try {
+      const res = await fetch('http://localhost:5000/api/upload-dxf', { method: 'POST', body: fd });
+      const data = await res.json();
+      if (data.error) { window.alert(`DXF 匯入錯誤：${data.error}`); return; }
+      const walls = data.walls ?? [];
+      const cols = data.columns ?? [];
+      const newWalls = walls.map(w => ({
+        start: { x: w.start[0], y: w.start[1] },
+        end:   { x: w.end[0],   y: w.end[1] },
+        typeId: wallTypes[0]?.id,
+        thickness: w.thickness ?? wallTypes[0]?.thickness ?? THICKNESS,
+        layer: w.layer,
+      }));
+      const newCols = cols.map(c => ({
+        cx: c.cx,
+        cy: c.cy,
+        type: 'rc',
+        rotated: Math.abs(Math.sin(c.angle)) > 0.5,
+        typeId: colTypes[0]?.id,
+        w: c.w,
+        h: c.h,
+        layer: c.layer,
+      }));
+      saveHistory();
+      setRawWalls(prev => [...prev, ...newWalls]);
+      if (newCols.length > 0) setColumns(prev => [...prev, ...newCols]);
+      const srcLayers = data.layers ?? [];
+      if (srcLayers.length > 0) {
+        setImportedLayers(prev => {
+          const map = new Map(prev.map(L => [L.name, L]));
+          srcLayers.forEach(L => map.set(L.name, L));
+          return [...map.values()];
+        });
+      }
+      setLayerPicker(null);
+    } catch (err) {
+      window.alert('連線失敗（確認後端是否啟動）');
+    } finally {
+      setImportBusy(false);
+    }
   }
 
   function handleClear() {
@@ -428,11 +526,30 @@ export default function App() {
     setDoorTypePanel(false);
   }
 
-  // Edits the type definition (affects future placements); existing openings
-  // keep their baked-in geometry/width — re-flowing them is a deferred stretch.
+  // 把「所有引用某開口型別」的已放置開口重排成新寬度；回傳塞不下（被跳過）的數量。
+  // isDoor：true=門型別、false=窗型別。重排後三元組 index 不變，故可依序套用。
+  // 純計算（不在 setState updater 裡做副作用），有實際變更才 saveHistory + 寫回。
+  function reflowOpeningsOfType(isDoor, id, width) {
+    let skipped = 0, changed = false;
+    let next = rawWalls;
+    for (let i = 0; i < next.length; i++) {
+      const w = next[i];
+      if ((isDoor ? w.isDoor : w.isWindow) && w.typeId === id) {
+        const r = reflowOpening(next, i, { id, width });
+        if (r.ok) { if (r.walls !== next) changed = true; next = r.walls; }
+        else skipped++;
+      }
+    }
+    if (changed) { saveHistory(); setRawWalls(next); }
+    return { skipped };
+  }
+
+  // 編輯型別定義（套用到未來放置），並把已放置的同型別開口重排成新寬度（塞不下者跳過並提示）。
   function handleEditDoorType(id, name, width) {
     setDoorTypes(prev => prev.map(t => t.id === id ? { ...t, name, width } : t));
+    const { skipped } = reflowOpeningsOfType(true, id, width);
     setEditingDoorTypeId(null);
+    if (skipped > 0) window.alert(`${skipped} 個門因牆段太短，未套用新寬度`);
   }
 
   function handleDeleteDoorType(id) {
@@ -458,7 +575,9 @@ export default function App() {
 
   function handleEditWindowType(id, name, width) {
     setWindowTypes(prev => prev.map(t => t.id === id ? { ...t, name, width } : t));
+    const { skipped } = reflowOpeningsOfType(false, id, width);
     setEditingWindowTypeId(null);
+    if (skipped > 0) window.alert(`${skipped} 個窗因牆段太短，未套用新寬度`);
   }
 
   function handleDeleteWindowType(id) {
@@ -532,6 +651,8 @@ export default function App() {
   }
 
   function handleMouseDown(e) {
+    // 清掉可能殘留的抑制旗標（若上次框選後瀏覽器沒觸發 click，避免誤吞下一次點擊）
+    suppressClickRef.current = false;
     if (e.button === 1) {
       e.preventDefault();
       setPanning({ startX: e.clientX, startY: e.clientY, origOffsetX: viewTransform.offsetX, origOffsetY: viewTransform.offsetY });
@@ -598,6 +719,10 @@ export default function App() {
         wallDragPendingRef.current = pending;
         return;
       }
+      // 空白處 → 開始框選
+      const m = { startRaw: rawPt, curRaw: rawPt };
+      setMarquee(m);
+      marqueeRef.current = m;
       return;
     }
 
@@ -684,6 +809,14 @@ function applyWallSnap(pt) {
         next[endpointDrag.wallIdx] = { ...w, [endpointDrag.endpoint]: snapped };
         return next;
       });
+      return;
+    }
+    if (marquee) {
+      const rawPt = getRawPt(e);
+      const m = { ...marquee, curRaw: rawPt };
+      setMarquee(m);
+      marqueeRef.current = m;
+      setCursor(rawPt);
       return;
     }
     let pt = getPoint(e);
@@ -774,6 +907,30 @@ if (mode !== 'wall') setSnapIndicator(null);
   function handleMouseUp(e) {
     if (panning) { setPanning(null); return; }
     if (endpointDrag) { setEndpointDrag(null); return; }
+    if (marquee) {
+      const m = marqueeRef.current ?? marquee;
+      setMarquee(null); marqueeRef.current = null;
+      const dScreen = Math.hypot(
+        (m.curRaw.x - m.startRaw.x) * viewTransform.scale,
+        (m.curRaw.y - m.startRaw.y) * viewTransform.scale,
+      );
+      if (dScreen < 4) return; // 幾乎沒動 → 當成一般點擊，交給 handleClick 清除選取
+      const selMode = m.curRaw.x >= m.startRaw.x ? 'window' : 'crossing';
+      const rect = {
+        minX: Math.min(m.startRaw.x, m.curRaw.x), maxX: Math.max(m.startRaw.x, m.curRaw.x),
+        minY: Math.min(m.startRaw.y, m.curRaw.y), maxY: Math.max(m.startRaw.y, m.curRaw.y),
+      };
+      const hits = boxSelect(rawWalls, columns, rect, selMode, selFilter);
+      const ctrlHeld = e.ctrlKey || e.metaKey;
+      setSelected(prev => {
+        if (!ctrlHeld) return hits;
+        const merged = [...prev];
+        hits.forEach(h => { if (!merged.some(s => s.type === h.type && s.idx === h.idx)) merged.push(h); });
+        return merged;
+      });
+      suppressClickRef.current = true; // 抑制隨後的 click（避免清掉剛框到的選取）
+      return;
+    }
     if (wallDragPending) {
       setWallDragPending(null);
        wallDragPendingRef.current = null;
@@ -833,6 +990,7 @@ if (mode !== 'wall') setSnapIndicator(null);
   }
 
   function handleClick(e) {
+    if (suppressClickRef.current) { suppressClickRef.current = false; return; }
     if (dragging) return;
     const rawPt = getRawPt(e);
     const pt = { x: snap(rawPt.x), y: snap(rawPt.y) };
@@ -936,7 +1094,7 @@ if (mode !== 'wall') setSnapIndicator(null);
       if (obj) return '已選取牆段 — 拖拉平移，點標註數字修改長度，Delete 刪除，Ctrl+點擊複選';
     }
     if (suspended) return `已暫停（${mode === 'column' ? '柱' : mode === 'wall' ? '牆' : mode === 'door' ? '門' : '窗'}模式）— 點擊繼續放置，再按 ESC 回到選取`;
-    if (mode === 'select')  return '選取模式 — 點擊選取，Ctrl+點擊複選';
+    if (mode === 'select')  return marquee ? (marquee.curRaw.x >= marquee.startRaw.x ? '窗選：框住的物件才選（左→右）' : '框選：碰到的物件都選（右→左）') : '選取模式 — 點擊選取，Ctrl+點擊複選，空白處拖曳框選';
     if (mode === 'column')  return `放置 ${colType === 'rc' ? 'RC 柱' : 'H 鋼柱'}（80×100）— 點擊放置，空白鍵旋轉，ESC 暫停`;
     if (mode === 'wall')    return startPt ? '點第二點完成牆段（鎖定正交），ESC 取消本段' : '點空白處開始畫牆，ESC 暫停';
     if (mode === 'door')    return dragging ? '拖拉中⋯ 放開確認' : '靠近牆放置門，ESC 暫停';
@@ -1070,14 +1228,24 @@ if (mode !== 'wall') setSnapIndicator(null);
     if (singleSel?.type === 'rawWall' && selWallObj) {
       if (selWallObj.isDoor || selWallObj.isWindow) {
         const isD = selWallObj.isDoor;
-        const t = (isD ? doorTypes : windowTypes).find(x => x.id === selWallObj.typeId);
+        const types = isD ? doorTypes : windowTypes;
         const span = Math.round(Math.hypot(selWallObj.ptB.x - selWallObj.ptA.x, selWallObj.ptB.y - selWallObj.ptA.y));
         return (
           <div>
             <div style={sectionTitleStyle}>{isD ? '門' : '窗'}</div>
-            <PropRow k="類型" v={t ? `${t.name}（寬 ${t.width}）` : '—'} />
+            <select value={selWallObj.typeId ?? ''} style={typeSelectStyle}
+              onChange={e => {
+                const nt = types.find(x => x.id === e.target.value);
+                if (!nt) return;
+                const r = reflowOpening(rawWalls, singleSel.idx, nt);
+                if (!r.ok) { window.alert('新寬度比牆段長，無法套用'); return; }
+                saveHistory();
+                setRawWalls(r.walls);
+              }}>
+              {types.map(x => <option key={x.id} value={x.id}>{x.name}（寬 {x.width}）</option>)}
+            </select>
             <PropRow k="開口寬" v={String(span)} />
-            <div style={noteStyle}>已放置的開口暫不支援換類型（幾何需重排）；點畫布上的雙箭頭可反轉方向</div>
+            <div style={noteStyle}>換類型會依新寬度重排開口；點畫布上的雙箭頭可反轉方向</div>
           </div>
         );
       }
@@ -1113,12 +1281,28 @@ if (mode !== 'wall') setSnapIndicator(null);
     if (mode === 'door') return renderTypeList(typePanelCfg.door);
     if (mode === 'window') return renderTypeList(typePanelCfg.window);
     return (
-      <div style={{ color: '#666', fontSize: 12, lineHeight: 1.8 }}>
-        未選取物件<br />
-        牆段 {rawWalls.filter(w => !w.isDoor && !w.isWindow).length}、
-        門 {rawWalls.filter(w => w.isDoor).length}、
-        窗 {rawWalls.filter(w => w.isWindow).length}、
-        柱 {columns.length}
+      <div>
+        <div style={sectionTitleStyle}>框選篩選</div>
+        <div style={{ color: '#666', fontSize: 11, lineHeight: 1.6, marginBottom: 8 }}>
+          左→右框住才選（藍），右→左碰到即選（綠）
+        </div>
+        {[
+          { key: 'wall', label: '牆' },
+          { key: 'column', label: '柱' },
+          { key: 'opening', label: '門窗' },
+        ].map(f => (
+          <label key={f.key} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#aaa', padding: '3px 0', cursor: 'pointer' }}>
+            <input type="checkbox" checked={selFilter[f.key]}
+              onChange={e => setSelFilter(prev => ({ ...prev, [f.key]: e.target.checked }))} />
+            {f.label}
+          </label>
+        ))}
+        <div style={{ color: '#666', fontSize: 12, lineHeight: 1.8, marginTop: 10, borderTop: '1px solid #262626', paddingTop: 8 }}>
+          牆段 {rawWalls.filter(w => !w.isDoor && !w.isWindow).length}、
+          門 {rawWalls.filter(w => w.isDoor).length}、
+          窗 {rawWalls.filter(w => w.isWindow).length}、
+          柱 {columns.length}
+        </div>
       </div>
     );
   }
@@ -1152,51 +1336,9 @@ if (mode !== 'wall') setSnapIndicator(null);
             匯入 DXF
             <input type="file" accept=".dxf" style={{ display: 'none' }} onChange={async e => {
               const file = e.target.files[0];
-              if (!file) return;
-              const fd = new FormData();
-              fd.append('file', file);
-              try {
-                const res = await fetch('http://localhost:5000/api/upload-dxf', { method: 'POST', body: fd });
-                const data = await res.json();
-                if (data.error) { console.error('DXF 匯入錯誤:', data.error); return; }
-                const walls = data.walls ?? [];
-                const cols = data.columns ?? [];
-                // 直接使用 DXF 原始座標（DXF 的 0,0 對齊世界原點十字）
-                // layer：記住來源 DXF 圖層，匯出時放回同一圖層（在 FloorAI 新畫的物件沒有 layer，用預設）
-                const newWalls = walls.map(w => ({
-                  start: { x: w.start[0], y: w.start[1] },
-                  end:   { x: w.end[0],   y: w.end[1] },
-                  typeId: wallTypes[0]?.id,
-                  thickness: w.thickness ?? wallTypes[0]?.thickness ?? THICKNESS,
-                  layer: w.layer,
-                }));
-                const newCols = cols.map(c => ({
-                  cx: c.cx,
-                  cy: c.cy,
-                  type: 'rc',
-                  rotated: Math.abs(Math.sin(c.angle)) > 0.5,
-                  typeId: colTypes[0]?.id,
-                  w: c.w,
-                  h: c.h,
-                  layer: c.layer,
-                }));
-                console.log(`DXF 匯入：${newWalls.length} 條牆、${newCols.length} 根柱`);
-                saveHistory();
-                setRawWalls(prev => [...prev, ...newWalls]);
-                if (newCols.length > 0) setColumns(prev => [...prev, ...newCols]);
-                // 記下來源圖層外觀（依 name 合併，新匯入覆蓋同名）
-                const srcLayers = data.layers ?? [];
-                if (srcLayers.length > 0) {
-                  setImportedLayers(prev => {
-                    const map = new Map(prev.map(L => [L.name, L]));
-                    srcLayers.forEach(L => map.set(L.name, L));
-                    return [...map.values()];
-                  });
-                }
-              } catch (err) {
-                console.error('連線失敗（確認後端是否啟動）:', err);
-              }
               e.target.value = '';
+              if (!file) return;
+              await handleDxfFileSelected(file);
             }} />
           </label>
           <button onClick={async () => {
@@ -1305,6 +1447,21 @@ if (mode !== 'wall') setSnapIndicator(null);
             </g>
           );
         })()}
+
+        {marquee && (() => {
+          const a = worldToScreen(marquee.startRaw.x, marquee.startRaw.y);
+          const b = worldToScreen(marquee.curRaw.x, marquee.curRaw.y);
+          const x = Math.min(a.x, b.x), y = Math.min(a.y, b.y);
+          const w = Math.abs(a.x - b.x), h = Math.abs(a.y - b.y);
+          const isWindow = marquee.curRaw.x >= marquee.startRaw.x; // 左→右 = 窗選
+          const stroke = isWindow ? '#3b82f6' : '#22c55e';
+          return (
+            <rect x={x} y={y} width={w} height={h}
+              fill={stroke} fillOpacity={0.08}
+              stroke={stroke} strokeWidth={1}
+              strokeDasharray={isWindow ? undefined : '5 4'} />
+          );
+        })()}
       </svg>
         </div>
       </div>
@@ -1332,6 +1489,66 @@ if (mode !== 'wall') setSnapIndicator(null);
           }}
           onBlur={() => setEditingDim(null)}
         />
+      )}
+
+      {layerPicker && (
+        <div style={{ position: 'fixed', inset: 0, background: '#000000aa', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 30 }}>
+          <div style={{ background: '#161616', border: '1px solid #333', borderRadius: 8, padding: 16, width: 460, maxHeight: '70vh', display: 'flex', flexDirection: 'column' }}>
+            <div style={{ color: '#00d4aa', fontSize: 14, marginBottom: 4 }}>標記圖層角色（牆／柱）</div>
+            <div style={{ color: '#666', fontSize: 11, marginBottom: 10, lineHeight: 1.5 }}>
+              牆圖層只參與牆辨識、柱圖層只參與柱辨識，兩者分開——牆轉角配不出來的碎片才不會被誤判成柱。
+              標註、文字、家具等圖層兩者都不要勾。已依圖層名稱猜測預選，仍請確認再匯入。
+            </div>
+            <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+              <button onClick={() => { setWallLayers(new Set()); setColLayers(new Set()); }}
+                style={{ ...panelBtnStyle, flex: 1 }}>全部清空</button>
+            </div>
+            <div style={{ display: 'flex', padding: '2px 8px', fontSize: 11, color: '#666' }}>
+              <span style={{ flex: 1 }}>圖層</span>
+              <span style={{ width: 40, textAlign: 'center' }}>牆</span>
+              <span style={{ width: 40, textAlign: 'center' }}>柱</span>
+              <span style={{ width: 50, textAlign: 'right' }}>線段</span>
+            </div>
+            <div style={{ overflowY: 'auto', border: '1px solid #262626', borderRadius: 6 }}>
+              {layerPicker.layers.length === 0 && (
+                <div style={{ color: '#666', fontSize: 12, padding: 10 }}>這份圖沒有可辨識的線段圖層</div>
+              )}
+              {layerPicker.layers.map(L => (
+                <div key={L.name} style={{ display: 'flex', alignItems: 'center', padding: '6px 8px', borderBottom: '1px solid #1e1e1e', fontSize: 12 }}>
+                  <span style={{ color: '#ccc', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{L.name}</span>
+                  <span style={{ width: 40, textAlign: 'center' }}>
+                    <input type="checkbox" checked={wallLayers.has(L.name)}
+                      onChange={e => setWallLayers(prev => {
+                        const next = new Set(prev);
+                        if (e.target.checked) next.add(L.name); else next.delete(L.name);
+                        return next;
+                      })} />
+                  </span>
+                  <span style={{ width: 40, textAlign: 'center' }}>
+                    <input type="checkbox" checked={colLayers.has(L.name)}
+                      onChange={e => setColLayers(prev => {
+                        const next = new Set(prev);
+                        if (e.target.checked) next.add(L.name); else next.delete(L.name);
+                        return next;
+                      })} />
+                  </span>
+                  <span style={{ width: 50, textAlign: 'right', color: '#666' }}>{L.count}</span>
+                </div>
+              ))}
+            </div>
+            <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+              <button onClick={() => setLayerPicker(null)} disabled={importBusy}
+                style={{ ...panelBtnStyle, flex: 1 }}>取消</button>
+              <button onClick={confirmDxfImport} disabled={importBusy || (wallLayers.size === 0 && colLayers.size === 0)}
+                style={{ ...panelBtnStyle, flex: 1,
+                  background: (wallLayers.size === 0 && colLayers.size === 0) ? '#1a1a1a' : '#00d4aa22',
+                  color: (wallLayers.size === 0 && colLayers.size === 0) ? '#444' : '#00d4aa',
+                  borderColor: (wallLayers.size === 0 && colLayers.size === 0) ? '#333' : '#00d4aa66' }}>
+                {importBusy ? '匯入中…' : `確認匯入（牆${wallLayers.size}・柱${colLayers.size}）`}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

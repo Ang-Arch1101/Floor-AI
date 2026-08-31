@@ -1,8 +1,9 @@
 # FloorAI 程式碼索引
-> 更新：2026-07-12｜對應：DXF 匯入/匯出 + 圖層保留完成（PR #7）
+> 更新：2026-07-18｜對應：框選/篩選 + 開口重排 + DXF 匯入前選圖層（含真實 Revit 圖面實測，本分支）
 
-> ⚠️ **DXF 匯入尚未大量測試** — 只驗證過 `test.dxf` 與自家 round-trip，真實圖面未測；
-> 配對參數/單位/接合裁切可能需要調整。詳見本檔案最後的「已知限制」與 `CLAUDE.md`。
+> ✅ **DXF 匯入已用真實 Revit 匯出圖面實測**（27 圖層、6331 條線、10.6MB）——單位/牆厚參數不用調，
+> 但發現並修正了「牆轉角碎片被誤判成柱」的新問題（見下方 `parse_dxf` 圖層分角色說明）。
+> 仍只驗證過這一份圖，換其他來源的圖面（不同建模習慣、單位）可能還是要重調。詳見 `CLAUDE.md`。
 
 **單位約定**：世界座標 1 unit = 1 cm（牆厚 15、門寬 80 皆為公分語意）；DXF 匯出寫 `$INSUNITS=5`。
 
@@ -10,32 +11,39 @@
 
 ## 後端（`backend/`）
 
-### `backend/app.py`（138 行）
+### `backend/app.py`（~120 行）
 | 內容 | 行號 | 說明 |
 |------|------|------|
-| `EXPORT_LAYERS` | L13 | 匯出預設圖層與 ACI 顏色：WALL/DOOR/WINDOW |
-| `LAYER_REMAP` | L19 | `{COL: WALL}` — FloorAI 新畫的 RC 柱併入 WALL 圖層 |
-| `POST /api/upload-dxf` | L23 | 接收 `.dxf`，呼叫 `parse_dxf`，回傳 `{walls, columns, layers, ...}` |
-| `POST /api/export-dxf` | L54 | 收 `{lines, arcs, scale?, layers?}` → ezdxf R2010（`setup=True` 載標準線型）、`$INSUNITS=5` → 回傳檔案下載 |
-| `ensure_layer`（export 內） | L84 | 依需要建圖層：來源層套回 `layers` 傳來的顏色/線型/線寬（非標準線型退回 CONTINUOUS）；FloorAI 預設層配 ACI 色 |
-| `DASHED` 線型 + 門弧套用 | L78 / L120 | 門弧匯出成虛線，對齊畫面 `strokeDasharray` |
+| `EXPORT_LAYERS` | L14 | 匯出預設圖層與 ACI 顏色：WALL/DOOR/WINDOW |
+| `LAYER_REMAP` | L20 | `{COL: WALL}` — FloorAI 新畫的 RC 柱併入 WALL 圖層 |
+| `POST /api/scan-dxf-layers` | L23 | 接收 `.dxf`，呼叫 `scan_layers`（只掃描不辨識），回傳 `{layers:[{name,count,color,linetype}]}` |
+| `_parse_layer_list_field(name)` | L47 | 讀一個可選的 form 欄位（JSON 陣列字串），沒帶回傳 `None` |
+| `POST /api/upload-dxf` | L55 | 接收 `.dxf` + 可選 `wall_layers`/`col_layers`（form 欄位，JSON 陣列字串，圖層分角色），呼叫 `parse_dxf`，回傳 `{walls, columns, layers, ...}` |
+| `POST /api/export-dxf` | L96 | 收 `{lines, arcs, scale?, layers?}` → ezdxf R2010（`setup=True` 載標準線型）、`$INSUNITS=5` → 回傳檔案下載 |
+| `ensure_layer`（export 內） | export 內 | 依需要建圖層：來源層套回 `layers` 傳來的顏色/線型/線寬（非標準線型退回 CONTINUOUS）；FloorAI 預設層配 ACI 色 |
+| `DASHED` 線型 + 門弧套用 | export 內 | 門弧匯出成虛線，對齊畫面 `strokeDasharray` |
 
-### `backend/dxf_parser.py`（238 行）
+### `backend/dxf_parser.py`（~330 行）
 | 名稱 | 行號 | 說明 |
 |------|------|------|
-| 參數常數 `GAP_MIN/GAP_MAX/OVERLAP_MIN/CLUSTER_GAP/MAX_COL/PARALLEL_TOL` | L5–10 | 牆厚範圍、重疊下限、柱群聚距離、容差，都是針對 `test.dxf` 調的 |
+| 參數常數 `GAP_MIN/GAP_MAX/OVERLAP_MIN/CLUSTER_GAP/MAX_COL/PARALLEL_TOL` | L5–10 | 牆厚範圍、重疊下限、柱群聚距離、容差；已用真實 Revit 圖面驗過牆厚範圍夠用，不用重調 |
 | `detect_rect_from_lwpoly(entity)` | L13 | closed 4-頂點矩形 LWPOLYLINE → 柱（帶來源 layer） |
 | `try_pair(a, b, ...)` | L39 | 兩線段平行 + 間距 8–30 + 重疊 ≥50 → 一道牆（中心線 + 厚度 + 取 a 的 layer） |
-| `pair_walls(segments)` | L84 | 貪婪配對平行線段成牆，回傳 `(walls, leftover)` |
+| `pair_walls(segments)` | L85 | 貪婪配對平行線段成牆，回傳 `(walls, leftover)` |
 | `cluster_columns(segments, ...)` | L108 | union-find 依端點鄰近（<50）分群 → bounding box 當柱；layer 取群內最多數 |
 | `OPENING_LAYERS` | L170 | `{DOOR, WINDOW}` — 這些圖層的線跳過牆/柱辨識（防幻影柱） |
-| `parse_dxf(file_path)` | L173 | 主流程：讀 LINE/LWPOLYLINE（每 segment 記 layer、跳過開口圖層）→ 配對牆 + 分群柱 |
-| `read_layer_table(doc)` | L220 | 讀來源圖層表 `[{name,color,linetype,lineweight}]`（跳過 0/Defpoints，負色正規化）|
+| `scan_layers(file_path)` | L173 | 匯入前掃描：列每個圖層的 LINE/LWPOLYLINE 數量（不辨識），供前端選圖層 UI |
+| `_collect_geometry(msp, layer_filter=None)` | L204 | 掃 modelspace 收集 `(segments, rect_columns)`，可選圖層白名單；`parse_dxf` 兩條路徑共用 |
+| `parse_dxf(file_path, wall_layers=None, col_layers=None)` | L235 | 主流程。兩者皆 `None`＝舊版共用池（牆配對剩餘碎片流入 `cluster_columns`，可能誤判成柱）；任一給值＝**圖層分角色**——`wall_layers` 只餵 `pair_walls`、`col_layers` 只餵 `cluster_columns`，牆碎片直接丟棄不進柱辨識（實測真實圖面發現的幻影柱問題就是這樣修的） |
+| `read_layer_table(doc)` | L277 | 讀來源圖層表 `[{name,color,linetype,lineweight}]`（跳過 0/Defpoints，負色正規化）|
 
-- 測試檔：根目錄 `test.dxf`（4 牆 + 5 柱）
-- 回歸測試：`backend/test_parser.py`（獨立 assert 腳本，`python test_parser.py`，5 個測試）——
-  幻影柱排除、來源圖層保留、圖層外觀讀取、關閉圖層負色正規化、test.dxf 正常匯入
+- 測試檔：根目錄 `test.dxf`（4 牆 + 5 柱，`parse_dxf(path)` 舊版共用池模式）
+- 回歸測試：`backend/test_parser.py`（獨立 assert 腳本，`python test_parser.py`，9 個測試）——
+  幻影柱排除（開口圖層）、來源圖層保留、圖層外觀讀取、關閉圖層負色正規化、圖層掃描計數、
+  `wall_layers` 過濾誤配標註、`col_layers` 排除家具方框、**圖層分角色排除牆角碎片誤判成柱**、
+  test.dxf 正常匯入
 - 依賴：`backend/requirements.txt`（`pip install -r requirements.txt`，`python app.py` 監聽 :5000）
+- ⚠️ 只吃 DXF，不支援 DWG（ezdxf 讀不了私有二進位格式）；Revit/AutoCAD 匯出的 DWG 需先轉檔
 
 ---
 
@@ -58,6 +66,7 @@ App.js 渲染管線與 DXF 匯出共用；`npm test` 直接對這裡斷言（`sr
 | `getFixedEnd(wall, rawWalls)` | L71 | 判斷哪端是 T 型固定端 |
 | `placeOpening(walls, wallIdx, clickPt, type, flipped, openingType)` | L92 | 插入門/窗（截成3段，繼承宿主牆厚/typeId/layer） |
 | `findOpeningGroup` / `mergeOpening` | L122/L128 | 找開口左右牆段 / 合併三段回一段（還原 typeId/thickness/layer） |
+| `reflowOpening(walls, objIdx, newOpeningType)` | L136 | 已放置開口換型別/寬度：合回宿主牆→同中心重放；回傳 `{walls, ok}`，塞不下時 ok:false 保留原狀 |
 | `getColCorners` / `ptInCol` | L136/L144 | 柱範圍計算與命中測試 |
 | `splitWallByColumns` / `splitAllWallsByColumn` | L151/L199 | 牆被柱截斷（資料層） |
 | `segIntersectT(...)` | L208 | 線段交叉 → `{tA,tB}` |
@@ -129,10 +138,15 @@ App.js 渲染管線與 DXF 匯出共用；`npm test` 直接對這裡斷言（`sr
   </div>
   狀態列：getHint()
   editingDim 輸入框（fixed）
+  layerPicker modal（fixed，畫面正中）：匯入前標記圖層角色（牆／柱）
 </div>
 ```
 - 「匯出 DXF」：`buildExportGeometry(rawWalls, columns)` + `importedLayers` → POST `/api/export-dxf` → blob 下載 `floorai.dxf`
-- 「匯入 DXF」：`<input type=file>` → POST `/api/upload-dxf` → walls/columns/layers 疊加進 state（可 Ctrl+Z）
+- 「匯入 DXF」（兩段式，圖層分角色）：`<input type=file>` → `handleDxfFileSelected` POST
+  `/api/scan-dxf-layers` → 依圖層名稱關鍵字（`guessLayerRole`：`wall`/`牆`/`墙`、`col`/`柱`）
+  預先勾選 `wallLayers`/`colLayers` 兩個 Set → 開 `layerPicker` modal（每圖層兩個獨立勾選框：
+  牆／柱，同一圖層可以兩者都勾或都不勾）→ 確認 → `confirmDxfImport` 帶 `wall_layers`/`col_layers`
+  POST `/api/upload-dxf` → walls/columns/layers 疊加進 state（可 Ctrl+Z）
 
 ### 座標換算
 ```js

@@ -170,21 +170,47 @@ def cluster_columns(segments, cluster_gap=CLUSTER_GAP, max_col=MAX_COL):
 OPENING_LAYERS = {"DOOR", "WINDOW"}
 
 
-def parse_dxf(file_path):
-    """讀入 DXF：平行線配對還原牆，碎片分群還原柱。
+def scan_layers(file_path):
+    """匯入前掃描：列出每個圖層上有多少條 LINE/LWPOLYLINE 幾何（不做牆/柱辨識）。
 
-    DOOR/WINDOW 圖層（FloorAI 匯出的開口裝飾）不參與牆/柱辨識，
-    避免 round-trip 時窗框被 cluster_columns 誤判成柱。
+    給前端做「匯入前選圖層」的清單——Revit 等軟體匯出的圖常有十幾二十個圖層
+    （標註、文字、剖面線、家具…），全部丟進 pair_walls/cluster_columns 容易誤判，
+    讓使用者先勾選要參與辨識的圖層。回傳依實體數量由多到少排序。
     """
     doc = ezdxf.readfile(file_path)
     msp = doc.modelspace()
 
-    segments = []
-    columns = []
+    counts = {}
+    for entity in msp:
+        if entity.dxftype() not in ("LINE", "LWPOLYLINE"):
+            continue
+        layer = entity.dxf.layer
+        counts[layer] = counts.get(layer, 0) + 1
 
+    meta = {L["name"]: L for L in read_layer_table(doc)}
+    result = []
+    for name, count in counts.items():
+        m = meta.get(name, {})
+        result.append({
+            "name": name,
+            "count": count,
+            "color": m.get("color", 7),
+            "linetype": m.get("linetype", "Continuous"),
+        })
+    result.sort(key=lambda L: -L["count"])
+    return result
+
+
+def _collect_geometry(msp, layer_filter=None):
+    """掃 modelspace，回傳 (segments, rect_columns)。跳過 OPENING_LAYERS。
+    layer_filter：None＝不篩選圖層；給 set 則只收該 set 內的圖層。"""
+    segments = []
+    rect_columns = []
     for entity in msp:
         layer = entity.dxf.layer
         if layer in OPENING_LAYERS:
+            continue
+        if layer_filter is not None and layer not in layer_filter:
             continue
         if entity.dxftype() == "LINE":
             s = entity.dxf.start
@@ -194,7 +220,7 @@ def parse_dxf(file_path):
         elif entity.dxftype() == "LWPOLYLINE":
             rect = detect_rect_from_lwpoly(entity)
             if rect:
-                columns.append(rect)
+                rect_columns.append(rect)
                 continue
             pts = list(entity.get_points())
             for i in range(len(pts) - 1):
@@ -203,12 +229,43 @@ def parse_dxf(file_path):
             if entity.closed and len(pts) >= 2:
                 segments.append({"start": [pts[-1][0], pts[-1][1]],
                                  "end":   [pts[0][0], pts[0][1]], "layer": layer})
+    return segments, rect_columns
 
-    walls, leftover = pair_walls(segments)
-    columns += cluster_columns(leftover)
+
+def parse_dxf(file_path, wall_layers=None, col_layers=None):
+    """讀入 DXF：平行線配對還原牆，碎片分群還原柱。
+
+    DOOR/WINDOW 圖層（FloorAI 匯出的開口裝飾）一律跳過，不參與辨識。
+
+    wall_layers / col_layers 皆為 None（預設，向後相容舊行為）：
+        所有圖層的線段共用一個辨識池——pair_walls 配對成牆，配不出來的碎片
+        再丟給 cluster_columns 分群成柱。簡單，但在複雜真實圖面上，牆轉角/
+        T 型交接配不出來的碎片會被誤判成柱（幻影柱，實測 Revit 匯出圖驗證過）。
+
+    wall_layers 和/或 col_layers 任一給值（圖層分角色）：
+        wall_layers 圖層的線段只參與 pair_walls；col_layers 圖層的線段只參與
+        cluster_columns（含 LWPOLYLINE 矩形柱偵測）。牆配對剩餘的碎片不會流入
+        柱辨識，從根本避免牆轉角被誤判成柱。未指定的角色視為空清單
+        （例如只給 wall_layers，就不會辨識出任何柱）。
+    """
+    doc = ezdxf.readfile(file_path)
+    msp = doc.modelspace()
+    role_mode = wall_layers is not None or col_layers is not None
+
+    if not role_mode:
+        segments, rect_columns = _collect_geometry(msp)
+        walls, leftover = pair_walls(segments)
+        columns = rect_columns + cluster_columns(leftover)
+        raw_count = len(segments)
+    else:
+        wall_segments, _ = _collect_geometry(msp, set(wall_layers or []))
+        col_segments, rect_columns = _collect_geometry(msp, set(col_layers or []))
+        walls, _leftover = pair_walls(wall_segments)  # 牆剩餘碎片直接丟棄，不進柱辨識
+        columns = rect_columns + cluster_columns(col_segments)
+        raw_count = len(wall_segments) + len(col_segments)
 
     return {
-        "raw_count":   len(segments),
+        "raw_count":   raw_count,
         "wall_count":  len(walls),
         "col_count":   len(columns),
         "walls":       walls,
